@@ -64,9 +64,9 @@ class LocationTracker {
 
     // 3. Start scanning
     await LocalizationEngine.startScanning(
-      frequency: Duration(seconds: 6), // Optional (Default Duration(seconds: 6))
-      bufferSize: Duration(seconds: 6), // Optional (Default Duration(seconds: 6))
-      timeout: Duration(minutes: 5), // Optional
+      frequency: const Duration(seconds: 6), // Optional (Default Duration(seconds: 6))
+      bufferSize: const Duration(seconds: 6), // Optional (Default Duration(seconds: 6))
+      timeout: const Duration(minutes: 5), // Optional
 );
   }
 
