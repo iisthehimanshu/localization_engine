@@ -45,7 +45,7 @@ class LocationTracker {
 
   Future<void> start() async {
     // 1. Initialize the engine with your venue
-    await LocalizationEngine.setVenue(
+     LocalizationEngine.setVenue(
       venueName: 'MyOffice'
     );
 
