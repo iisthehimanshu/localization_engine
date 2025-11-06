@@ -1,7 +1,7 @@
 import 'dart:collection';
 import 'dart:math';
+import '../../Point.dart';
 import '../network/model/beaconData.dart';
-import 'initialLocalization.dart';
 
 class impericalLocalisation{
   Pt? estimateIntersectionCenter(

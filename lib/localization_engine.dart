@@ -1,12 +1,14 @@
 import 'package:flutter/services.dart';
-import 'localizationAlgorithm/initialLocalization.dart';
+import 'package:localization_engine/src/localizationAlgorithm/_initialLocalization.dart';
+import 'Point.dart';
+export 'Point.dart';
 
 class LocalizationEngine {
   static const MethodChannel _methodChannel = MethodChannel('localization_engine');
   static const EventChannel _eventChannel = EventChannel('ble_scan_stream');
   static InitialLocalization? _localization;
 
-  static void setVenue(String venueName) {
+  static void setVenue({required String venueName}) {
     _localization = InitialLocalization(venueName: venueName);
   }
 

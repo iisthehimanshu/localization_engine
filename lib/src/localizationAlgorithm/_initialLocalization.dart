@@ -1,20 +1,9 @@
 import 'dart:collection';
 import 'package:flutter_compass/flutter_compass.dart';
-
+import '../../Point.dart';
 import '../network/api/beaconapi.dart';
 import '../network/model/beaconData.dart';
-import 'directionalLocalisation.dart';
-
-class Pt {
-  final double x, y;
-  final Beacon beacon;
-  List<Beacon>? top3beacons;
-  Map<Beacon, double>? beaconRadiusMap;
-  Map<Beacon, double>? beaconRSSIMap;
-  Pt(this.x, this.y, this.beacon, {this.top3beacons, this.beaconRadiusMap, this.beaconRSSIMap});
-  @override
-  String toString() => '(${x.toInt()}, ${y.toInt()})';
-}
+import '_directionalLocalisation.dart';
 
 class InitialLocalization{
 

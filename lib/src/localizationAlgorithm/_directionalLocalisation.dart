@@ -1,8 +1,8 @@
 import 'dart:collection';
 import 'dart:io';
 import 'dart:math';
+import '../../Point.dart';
 import '../network/model/beaconData.dart';
-import 'initialLocalization.dart';
 
 enum Direction { TopBeaconToSecondBeacon, SecondBeaconToTopBeacon }
 
