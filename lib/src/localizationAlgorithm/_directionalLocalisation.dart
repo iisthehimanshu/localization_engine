@@ -1,10 +1,9 @@
 import 'dart:collection';
-import 'dart:io';
 import 'dart:math';
 import '../../Point.dart';
 import '../network/model/beaconData.dart';
 
-enum Direction { TopBeaconToSecondBeacon, SecondBeaconToTopBeacon }
+enum Direction { topBeaconToSecondBeacon, secondBeaconToTopBeacon }
 
 class DirectionalLocalisation {
   double lineOfSightTxPower = -75;
@@ -29,13 +28,13 @@ class DirectionalLocalisation {
 
 // 2️⃣ Compute average RSSI for each Beacon in the last 6 seconds
     final Map<String, double> avgRssi = {};
-    beaconData.forEach((Beacon, entries) {
+    beaconData.forEach((beacon, entries) {
       final recentRssi = entries
           .where((e) => e.key.isAfter(cutoff))
           .map((e) => e.value)
           .toList();
       if (recentRssi.isNotEmpty) {
-        avgRssi[Beacon] =
+        avgRssi[beacon] =
             recentRssi.reduce((a, b) => a + b) / recentRssi.length;
       }
     });
@@ -49,7 +48,7 @@ class DirectionalLocalisation {
     if(top3.isEmpty){
       return null;
     }else if (top3.length == 1){
-      Beacon beacon = apibeaconmap[top3.first]!;
+      Beacon beacon = apibeaconmap[top3.first.key]!;
       return Pt(beacon.coordinateX!.toDouble(), beacon.coordinateY!.toDouble(), beacon, top3beacons: [beacon]);
     }else if(top3.length == 2){
       top3.add(top3.last);
@@ -92,8 +91,8 @@ class DirectionalLocalisation {
 
     final lineOfSightDistanceTopBeacon = rssiToRadius(avgRssi[beaconKeys[0]]!, txPower: lineOfSightTxPower);
     final nonLineOfSightDistanceTopBeacon = rssiToRadius(avgRssi[beaconKeys[0]]!, txPower: nonLineOfSightTxPower);
-    final distanceSecondBeacon;
-    final distanceThirdBeacon;
+    final double distanceSecondBeacon;
+    final double distanceThirdBeacon;
 
     print("lineOfSightDistanceTopBeacon $lineOfSightDistanceTopBeacon nonLineOfSightDistanceTopBeacon $nonLineOfSightDistanceTopBeacon");
 
@@ -101,13 +100,13 @@ class DirectionalLocalisation {
     double angleBetweenTopBeaconAndThirdBeacon = calculateBearing(globalPos0, globalPos2);
     print("angleBetweenTopBeaconAndSecondBeacon $angleBetweenTopBeaconAndSecondBeacon angleBetweenTopBeaconAndThirdBeacon $angleBetweenTopBeaconAndThirdBeacon");
 
-    Direction direction = Direction.TopBeaconToSecondBeacon;
+    Direction direction = Direction.topBeaconToSecondBeacon;
 
     if (normalizeAngle(angleBetweenTopBeaconAndSecondBeacon - 90) < userDirection && normalizeAngle(angleBetweenTopBeaconAndSecondBeacon + 90) > userDirection) {
-      direction = Direction.TopBeaconToSecondBeacon;
+      direction = Direction.topBeaconToSecondBeacon;
       distanceSecondBeacon = rssiToRadius(avgRssi[beaconKeys[1]]!, txPower: lineOfSightTxPower);
     } else {
-      direction = Direction.SecondBeaconToTopBeacon;
+      direction = Direction.secondBeaconToTopBeacon;
       distanceSecondBeacon = rssiToRadius(avgRssi[beaconKeys[1]]!, txPower: nonLineOfSightTxPower);
     }
 
@@ -122,12 +121,12 @@ class DirectionalLocalisation {
     Point<int> ptBetween;
     Point<int> ptAway;
 
-    if (direction == Direction.TopBeaconToSecondBeacon) {
-      ptBetween = moveXY(Beacon: localPos0, directionDeg: normalizeAngle(angleBetweenTopBeaconAndSecondBeacon - 25), distance: nonLineOfSightDistanceTopBeacon);
-      ptAway = moveXY(Beacon: localPos0, directionDeg: normalizeAngle(angleBetweenTopBeaconAndSecondBeacon + 180 - 25), distance: lineOfSightDistanceTopBeacon);
+    if (direction == Direction.topBeaconToSecondBeacon) {
+      ptBetween = moveXY(beacon: localPos0, directionDeg: normalizeAngle(angleBetweenTopBeaconAndSecondBeacon - 25), distance: nonLineOfSightDistanceTopBeacon);
+      ptAway = moveXY(beacon: localPos0, directionDeg: normalizeAngle(angleBetweenTopBeaconAndSecondBeacon + 180 - 25), distance: lineOfSightDistanceTopBeacon);
     } else {
-      ptBetween = moveXY(Beacon: localPos0, directionDeg: normalizeAngle(angleBetweenTopBeaconAndSecondBeacon - 25), distance: lineOfSightDistanceTopBeacon);
-      ptAway = moveXY(Beacon: localPos0, directionDeg: normalizeAngle(angleBetweenTopBeaconAndSecondBeacon + 180 - 25), distance: nonLineOfSightDistanceTopBeacon);
+      ptBetween = moveXY(beacon: localPos0, directionDeg: normalizeAngle(angleBetweenTopBeaconAndSecondBeacon - 25), distance: lineOfSightDistanceTopBeacon);
+      ptAway = moveXY(beacon: localPos0, directionDeg: normalizeAngle(angleBetweenTopBeaconAndSecondBeacon + 180 - 25), distance: nonLineOfSightDistanceTopBeacon);
     }
 
 // 6️⃣ Candidate points along directions from top Beacon
@@ -135,17 +134,17 @@ class DirectionalLocalisation {
     print("ptBetween $ptBetween ptAway $ptAway");
 
 // 7️⃣ Compute derived RSSI values for each candidate
-    double computeDerivedRssi(Point<int> candidate, List<int> otherPos) {
-      double dist = calculateDistance(candidate, otherPos);
-      print("candidate $candidate otherPos $otherPos");
-      if (direction == Direction.TopBeaconToSecondBeacon) {
-        return radiusToRssi(sqrt((dist * dist) + 1),
-            txPower: lineOfSightTxPower);
-      } else {
-        return radiusToRssi(sqrt((dist * dist) + 1),
-            txPower: nonLineOfSightTxPower);
-      }
-    }
+//     double computeDerivedRssi(Point<int> candidate, List<int> otherPos) {
+//       double dist = calculateDistance(candidate, otherPos);
+//       print("candidate $candidate otherPos $otherPos");
+//       if (direction == Direction.TopBeaconToSecondBeacon) {
+//         return radiusToRssi(sqrt((dist * dist) + 1),
+//             txPower: lineOfSightTxPower);
+//       } else {
+//         return radiusToRssi(sqrt((dist * dist) + 1),
+//             txPower: nonLineOfSightTxPower);
+//       }
+//     }
 
     final distancePtBetweenB1 = calculateDistance(ptBetween, localPos1);
     final distancePtAway2B1 = calculateDistance(ptAway, localPos1);
@@ -161,16 +160,7 @@ class DirectionalLocalisation {
     double probPtAway = (((distancePtAway2B1 - distanceSecondBeacon)/(distanceSecondBeacon*distancePtAway2B1)).abs() + ((distancePtAway2B2 - distanceThirdBeacon)/(distanceThirdBeacon*distancePtAway2B2)).abs())/2;
 
     print("probPtBetween $probPtBetween probPtAway $probPtAway");
-    try{
-    await _appendLogToFile(
-    beaconData: beaconData,
-    userDirection: userDirection,
-    probBetween: probPtBetween,
-    probAway: probPtAway,
-    );
-    }catch(e){
-      print("Error while saving data $e");
-    }
+
 // 9️⃣ Return candidate with smaller error
     List<Beacon> top3Beacons = beaconKeys.map((key)=>apibeaconmap[key]!).toList();
     if (probPtBetween < probPtAway) {
@@ -226,13 +216,13 @@ class DirectionalLocalisation {
   }
 
   Point<int> moveXY({
-    required List<int> Beacon,
+    required List<int> beacon,
     required double directionDeg,
     required double distance,
   }) {
     final rad = (270 + directionDeg) * pi / 180;
-    final nx = Beacon[0] + distance.floor() * cos(rad);
-    final ny = Beacon[1] + distance.floor() * sin(rad);
+    final nx = beacon[0] + distance.floor() * cos(rad);
+    final ny = beacon[1] + distance.floor() * sin(rad);
     return Point(nx.round(), ny.round());
   }
 
@@ -281,43 +271,6 @@ class DirectionalLocalisation {
 
     return perpDist <= corridorWidth;
   }
-
-  Future<void> _appendLogToFile({
-    required Map<String, List<MapEntry<DateTime,int>>> beaconData,
-    required double userDirection,
-    required double probBetween,
-    required double probAway,
-  }) async {
-
-    // 2) Proceed to write
-    final file = File('/storage/emulated/0/Download/localisation_log.csv');
-
-    if(!await file.exists()){
-      await file.writeAsString(
-        'timestamp,userDirection,probBetween,probAway,beaconDataJson,Feedback\n',
-        mode: FileMode.write,
-        flush: true,
-      );
-    }
-
-    final beaconJson = beaconData.map(
-            (k,v)=> MapEntry(
-            k,
-            v.map((e)=>[e.key.toIso8601String(),e.value]).toList()
-        )
-    );
-
-    await file.writeAsString(
-      '${DateTime.now().toIso8601String()},'
-          '"${beaconJson.toString()}",'
-          '$userDirection,'
-          '$probBetween,'
-          '$probAway,',
-      mode: FileMode.append,
-      flush: true,
-    );
-  }
-
 }
 
 class Kalman1D {

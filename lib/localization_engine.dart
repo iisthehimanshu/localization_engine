@@ -62,7 +62,7 @@ class LocalizationEngine {
 
         for (var entry in rawList) {
           final map = Map<String, dynamic>.from(entry);
-          final device = map['device'] as String;
+          final device = map['name'] as String;
           final timestamp =
           DateTime.fromMillisecondsSinceEpoch(map['timestamp']);
           final rssi = map['rssi'] as int;
