@@ -3,7 +3,7 @@ import 'dart:math';
 import '../../Point.dart';
 import '../network/model/beaconData.dart';
 
-class circleIntersection{
+class CircleIntersection{
   Pt? estimateIntersectionCenter(
       Map<String, List<MapEntry<DateTime, int>>> beaconData,
       HashMap<String, Beacon> apibeaconmap,
@@ -22,10 +22,10 @@ class circleIntersection{
 
     // Step 1: Average RSSI for each Beacon in last 6 seconds
     final Map<String, double> avgRssi = {};
-    beaconData.forEach((Beacon, entries) {
+    beaconData.forEach((beacon, entries) {
       final recent = entries.where((e) => e.key.isBefore(cutoff)).map((e) => e.value).toList();
       if (recent.isNotEmpty) {
-        avgRssi[Beacon] = recent.reduce((a, b) => a + b) / recent.length;
+        avgRssi[beacon] = recent.reduce((a, b) => a + b) / recent.length;
       }
     });
     if (avgRssi.isEmpty) return null;
@@ -73,7 +73,7 @@ class circleIntersection{
     double rssiToRadius(double rssi) {
       // This is a simple model: stronger RSSI -> smaller radius
       // tweak 'scale' or formula based on your environment calibration
-      const double scale = 0.1;
+      // const double scale = 0.1;
       return (pow(10, (-70 - rssi) / (10 * 3))*3.28084);
     }
 
@@ -83,8 +83,8 @@ class circleIntersection{
     //   const double scale = 0.1;
     //   return pow(10, (-rssi) * scale).toDouble();
     // }
-    Map<Beacon, double> beaconRadiusMap = Map();
-    Map<Beacon, double> beaconRSSIMap = Map();
+    Map<Beacon, double> beaconRadiusMap = {};
+    Map<Beacon, double> beaconRSSIMap = {};
     Point? tryIntersection(Map<String, double> sigmaMap) {
       beaconRadiusMap.clear();
       final centers = <Point>[];
@@ -114,7 +114,7 @@ class circleIntersection{
     if(result == null){
       return null;
     }
-    return Pt(result!.x.toDouble(), result.y.toDouble(), apibeaconmap[top3.first]!, beaconRadiusMap: beaconRadiusMap, beaconRSSIMap: beaconRSSIMap);
+    return Pt(result.x.toDouble(), result.y.toDouble(), apibeaconmap[top3.first]!, beaconRadiusMap: beaconRadiusMap, beaconRSSIMap: beaconRSSIMap);
   }
 
 // -------------------- GEOMETRY UTILITY --------------------

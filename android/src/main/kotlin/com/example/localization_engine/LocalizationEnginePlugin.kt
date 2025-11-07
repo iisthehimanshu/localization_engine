@@ -82,6 +82,7 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         val resultsMap = scanBuffer.map {
           mapOf(
             "device" to it.second.device.address,
+            "name" to it.second.device.name,
             "rssi" to it.second.rssi,
             "timestamp" to it.first
           )
