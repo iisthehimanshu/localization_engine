@@ -8,8 +8,9 @@ class LocalizationEngine {
   static const EventChannel _eventChannel = EventChannel('ble_scan_stream');
   static InitialLocalization? _localization;
 
-  static void setVenue({required String venueName}) {
-    _localization = InitialLocalization(venueName: venueName);
+  static Future<void> _setVenue({required String venueName})async{
+    _localization = InitialLocalization(venueName);
+    await _localization?.parseBeaconMap(venueName);
   }
 
   /// Initialize scanning with custom params
@@ -33,14 +34,12 @@ class LocalizationEngine {
      Duration frequency = const Duration(seconds: 6),
      Duration bufferSize = const Duration(seconds: 6),
      Duration? timeout, // null means no timeout
+     required String venueName
   }) async {
     if (_isScanning) {
       throw StateError('Scanning is already in progress');
     }
-    if (_localization == null) {
-      throw StateError('Venue must be set before starting scan. Call setVenue() first.');
-    }
-
+    await _setVenue(venueName: venueName);
     _initializeScanning(frequency: frequency, bufferSize: bufferSize, timeout: timeout);
     await _methodChannel.invokeMethod('startScan');
     _isScanning = true;
@@ -62,6 +61,7 @@ class LocalizationEngine {
 
         for (var entry in rawList) {
           final map = Map<String, dynamic>.from(entry);
+          print("scanResults map $map");
           final device = map['name'] as String;
           final timestamp =
           DateTime.fromMillisecondsSinceEpoch(map['timestamp']);

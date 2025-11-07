@@ -8,18 +8,16 @@ import '_directionalLocalisation.dart';
 class InitialLocalization{
 
   final String _venueName;
-  late HashMap<String, Beacon> _apibeaconmap;
+  HashMap<String, Beacon> _apibeaconmap = HashMap();
 
-  InitialLocalization({required String venueName}) : _venueName = venueName{
-    _parseBeaconMap(_venueName);
-  }
+  InitialLocalization(this._venueName);
 
   Future<Pt?> findLocation(Map<String, List<MapEntry<DateTime, int>>> beaconData) async {
     double? compassDirection = await _getCurrentCompassHeading();
     return DirectionalLocalisation().estimateIntersectionCenter(beaconData, _apibeaconmap, compassDirection??0.0);
   }
 
-  Future<HashMap<String, Beacon>> _parseBeaconMap(String venueName) async {
+  Future<HashMap<String, Beacon>> parseBeaconMap(String venueName) async {
     List<dynamic> beaconList = await beaconapi().fetchBeaconData(venueName);
     for (var beacon in beaconList) {
       if (beacon.name != null) {
