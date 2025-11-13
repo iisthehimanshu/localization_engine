@@ -1,7 +1,8 @@
 import 'package:flutter/services.dart';
-import 'package:localization_engine/src/localizationAlgorithm/_initialLocalization.dart';
-import 'Point.dart';
-export 'Point.dart';
+import 'package:localization_engine_core/initialLocalization.dart';
+
+import 'package:localization_engine_core/Point.dart';
+export 'package:localization_engine_core/Point.dart';
 
 class LocalizationEngine {
   static const MethodChannel _methodChannel = MethodChannel('localization_engine');
@@ -61,11 +62,11 @@ class LocalizationEngine {
 
         for (var entry in rawList) {
           final map = Map<String, dynamic>.from(entry);
-          print("scanResults map $map");
           final device = map['name'] as String;
-          final timestamp =
-          DateTime.fromMillisecondsSinceEpoch(map['timestamp']);
+          if(!device.toLowerCase().contains("iw")) continue;
+          final timestamp = DateTime.fromMillisecondsSinceEpoch(map['timestamp']);
           final rssi = map['rssi'] as int;
+          // print("scanResults map $map");
 
           formattedData.putIfAbsent(device, () => []);
           formattedData[device]!.add(MapEntry(timestamp, rssi));
