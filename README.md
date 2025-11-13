@@ -40,11 +40,12 @@ Add the following to your Info.plist:
 import 'dart:async';
 import 'package:localization_engine/localization_engine.dart';
 
+
 class LocationTracker {
   StreamSubscription<Pt?>? _subscription;
 
   Future<void> start() async {
-    
+
     // 1. Listen to position updates
     _subscription = LocalizationEngine.scanResults.listen(
           (position) {
@@ -62,7 +63,7 @@ class LocationTracker {
     await LocalizationEngine.startScanning(
       frequency: const Duration(seconds: 6), // Optional (Default Duration(seconds: 6))
       bufferSize: const Duration(seconds: 6), // Optional (Default Duration(seconds: 6))
-      timeout: const Duration(minutes: 5), 
+      timeout: const Duration(minutes: 5),
       venueName: 'IITDelhi', // Required
     );
   }
