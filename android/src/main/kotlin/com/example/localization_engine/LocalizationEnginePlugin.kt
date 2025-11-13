@@ -48,7 +48,6 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         frequency = call.argument<Int>("frequency")?.toLong() ?: 5000L
         bufferSize = call.argument<Int>("bufferSize")?.toLong() ?: 5000L
         timeout = call.argument<Int?>("timeout")?.toLong()
-        Log.d("BluetoothScan","call ${call.argument<Int>("frequency")}");
         result.success(null)
       }
       "startScan" -> {
@@ -82,11 +81,12 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         val resultsMap = scanBuffer.map {
           mapOf(
             "device" to it.second.device.address,
-            "name" to it.second.device.name,
+            "name" to (it.second.scanRecord?.deviceName ?: it.second.device.name?: "Unknown"),
             "rssi" to it.second.rssi,
             "timestamp" to it.first
           )
         }
+//        Log.d("BluetoothScan","scanBuffer ${scanBuffer}");
         eventSink?.success(resultsMap)
         mainHandler.postDelayed(this, frequency)
       }
