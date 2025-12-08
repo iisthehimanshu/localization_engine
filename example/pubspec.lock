@@ -169,9 +169,11 @@ packages:
   localization_engine_core:
     dependency: transitive
     description:
-      path: "../../localization_engine_core"
-      relative: true
-    source: path
+      path: "."
+      ref: master
+      resolved-ref: "3735ff695e63583201cb8a98cf95f530aa8c378b"
+      url: "https://github.com/iisthehimanshu/LocalizationEngineCore.git"
+    source: git
     version: "0.0.1"
   matcher:
     dependency: transitive
