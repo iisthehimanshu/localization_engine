@@ -11,11 +11,9 @@ dependencies:
   flutter:
     sdk: flutter
   plugin_platform_interface: ^2.0.2
-  localization_engine_core:
-      git:
-        url: https://github.com/iisthehimanshu/LocalizationEngineCore.git
-        ref: master
-#        path: ../localization_engine_core
+  web:
+  http:
+  flutter_compass:
 
 
 

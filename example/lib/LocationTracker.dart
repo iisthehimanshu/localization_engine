@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:localization_engine/localization_engine.dart';
 
+export 'package:localization_engine/Point.dart';
+
 
 class LocationTracker {
   StreamSubscription<Pt?>? _subscription;
@@ -25,8 +27,12 @@ class LocationTracker {
       frequency: const Duration(seconds: 6), // Optional (Default Duration(seconds: 6))
       bufferSize: const Duration(seconds: 6), // Optional (Default Duration(seconds: 6))
       timeout: const Duration(minutes: 5),
-      venueName: 'IITDelhi', // Required
+      venueName: 'Ashoka University', // Required
     );
+  }
+
+  Future<Pt?> getCurrentLocation() async {
+    return await LocalizationEngine.getCurrentLocation(venueName: 'Ashoka University');
   }
 
   Future<void> stop() async {

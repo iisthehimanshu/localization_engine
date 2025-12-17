@@ -3,7 +3,6 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
-  localization_engine_core
   permission_handler_windows
 )
 

@@ -1,13 +1,19 @@
-import 'package:flutter/services.dart';
-import 'package:localization_engine_core/initialLocalization.dart';
+import 'dart:developer';
 
-import 'package:localization_engine_core/Point.dart';
-export 'package:localization_engine_core/Point.dart';
+import 'package:flutter/services.dart';
+import 'package:localization_engine/src/GPS/GPSBuffer.dart';
+
+import 'Point.dart';
+import 'initialLocalization.dart';
+
+export 'Point.dart';
 
 class LocalizationEngine {
   static const MethodChannel _methodChannel = MethodChannel('localization_engine');
-  static const EventChannel _eventChannel = EventChannel('ble_scan_stream');
+  static const EventChannel _bleEventChannel = EventChannel('ble_scan_stream');
+  static const EventChannel _gpsEventChannel = EventChannel('gps_scan_stream');
   static InitialLocalization? _localization;
+  static final gpsBuffer = GPSBuffer();
 
   static Future<void> _setVenue({required String venueName})async{
     _localization = InitialLocalization(venueName);
@@ -42,19 +48,21 @@ class LocalizationEngine {
     }
     await _setVenue(venueName: venueName);
     _initializeScanning(frequency: frequency, bufferSize: bufferSize, timeout: timeout);
+    await _methodChannel.invokeMethod('startGpsScan');
     await _methodChannel.invokeMethod('startScan');
     _isScanning = true;
   }
 
   static Future<void> stopScanning() async {
     await _methodChannel.invokeMethod('stopScan');
+    await _methodChannel.invokeMethod('stopGpsScan');
     _isScanning = false;
   }
 
   /// Stream to listen to periodic scan results
   /// Listen to BLE scan results as a stream of list of devices
   static Stream<Pt?> get scanResults =>
-      _eventChannel.receiveBroadcastStream().asyncMap((event) async {
+      _bleEventChannel.receiveBroadcastStream().asyncMap((event) async {
         try {
         final List<dynamic> rawList = event as List;
 
@@ -79,6 +87,66 @@ class LocalizationEngine {
       }).handleError((error) {
         print('Stream error: $error');
       });
+
+  static Future<Pt?> getCurrentLocation({required String venueName}) async {
+    await startScanning(
+      frequency: const Duration(seconds: 3),
+      bufferSize: const Duration(seconds: 6),
+      timeout: const Duration(seconds: 7),
+      venueName: venueName,
+    );
+
+    try {
+      final gpsSubscription = _gpsEventChannel.receiveBroadcastStream().listen((data) {
+        print(data);
+        gpsBuffer.add(data['latitude'], data['longitude']);
+        },
+          onError: (error) {
+        print('GPS stream error: $error');
+      });
+
+      // Wait for BLE event
+      final event = await _bleEventChannel
+          .receiveBroadcastStream()
+          .where((event) => event is List && event.isNotEmpty)
+          .first;
+
+      log("getCurrentLocation event $event");
+
+      final List<dynamic> rawList = event as List;
+      final Map<String, List<MapEntry<DateTime, int>>> formattedData = {};
+
+      for (var entry in rawList) {
+        final map = Map<String, dynamic>.from(entry);
+        final device = map['name'] as String;
+
+        if (!device.toLowerCase().contains("iw")) continue;
+
+        final timestamp = DateTime.fromMillisecondsSinceEpoch(map['timestamp']);
+        final rssi = map['rssi'] as int;
+
+        formattedData.putIfAbsent(device, () => []);
+        formattedData[device]!.add(MapEntry(timestamp, rssi));
+      }
+
+      // Clean up
+      await gpsSubscription.cancel();
+      await stopScanning(); // Also add await here for consistency
+
+      return await _localization?.findLocation(formattedData);
+    }on StateError catch (e) {
+      await stopScanning();
+      List<double>? gpsLocation = gpsBuffer.getRobustPosition();
+      print("gpsLocation $gpsLocation");
+      if(gpsLocation != null && gpsLocation.isNotEmpty){
+        return Pt(latitude: gpsLocation[0], longitude: gpsLocation[1]);
+      }
+      return null;
+    }catch (e){
+      return null;
+    }
+  }
+
 
   static Future<void> dispose() async {
     await stopScanning();
