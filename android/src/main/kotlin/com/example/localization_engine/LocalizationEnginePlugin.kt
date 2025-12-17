@@ -99,7 +99,7 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             ?: result.device.name
             ?: return   // ignore unnamed devices
 
-        if (!deviceName.startsWith("IWbeacon", ignoreCase = true)) return
+        if (!deviceName.startsWith("IW", ignoreCase = true)) return
 
         val timestamp = System.currentTimeMillis()
         scanBuffer.add(Pair(timestamp, result))
