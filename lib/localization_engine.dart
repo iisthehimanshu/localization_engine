@@ -165,6 +165,8 @@ class LocalizationEngine {
       throw LocalizationException("Unable to Find Your Location");
     }on AdapterException{
      rethrow;
+    }on PermissionException{
+      rethrow;
     }catch (_){
       return null;
     }finally{
