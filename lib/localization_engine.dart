@@ -68,6 +68,8 @@ class LocalizationEngine {
       await _methodChannel.invokeMethod('startGpsScan');
       await _methodChannel.invokeMethod('startScan');
       _isScanning = true;
+    }else if(adapterState['PermanentlyDenied']){
+      throw PermissionException(adapterState['errors'].first);
     }else{
       throw AdapterException(adapterState['errors'].first);
     }
