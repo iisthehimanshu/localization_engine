@@ -6,18 +6,10 @@ packages:
     description:
       path: "."
       ref: main
-      resolved-ref: "4dd68560b5911026fff30f1de834f5de66104316"
+      resolved-ref: c39d28b7a6bc2db9a655c7e5fb5a004fe44026a3
       url: "https://github.com/iisthehimanshu/adaptermanager"
     source: git
     version: "0.0.1"
-  app_settings:
-    dependency: transitive
-    description:
-      name: app_settings
-      sha256: "64d50e666fd96ae90301bf71205f05019286f940ad6f5fed3d1be19c6af7546a"
-      url: "https://pub.dev"
-    source: hosted
-    version: "7.0.0"
   args:
     dependency: transitive
     description:

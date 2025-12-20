@@ -12,10 +12,10 @@ dependencies:
     sdk: flutter
 
   adapter_manager:
-#    git:
-#      url: https://github.com/iisthehimanshu/adaptermanager
-#      ref: main
-    path: ../../adapter_manager/
+    git:
+      url: https://github.com/iisthehimanshu/adaptermanager
+      ref: main
+#    path: ../../adapter_manager/
 
 
   plugin_platform_interface: ^2.0.2
