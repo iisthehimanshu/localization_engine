@@ -32,7 +32,11 @@ class LocationTracker {
   }
 
   Future<Pt?> getCurrentLocation() async {
-    return await LocalizationEngine.getCurrentLocation(venueName: 'Ashoka University');
+    try{
+      return await LocalizationEngine.getCurrentLocation(venueName: 'Ashoka University');
+    }catch (e){
+      rethrow;
+    }
   }
 
   Future<void> stop() async {

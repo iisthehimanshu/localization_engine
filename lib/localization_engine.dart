@@ -69,7 +69,7 @@ class LocalizationEngine {
       await _methodChannel.invokeMethod('startScan');
       _isScanning = true;
     }else{
-      throw AdapterException(adapterState['errors']);
+      throw AdapterException(adapterState['errors'].first);
     }
   }
 
