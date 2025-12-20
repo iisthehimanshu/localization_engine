@@ -1,12 +1,17 @@
 import 'dart:developer';
 
+import 'package:adapter_manager/adapter_manager.dart';
 import 'package:flutter/services.dart';
 import 'package:localization_engine/src/GPS/GPSBuffer.dart';
 
+import 'LocalizationException.dart';
 import 'Point.dart';
 import 'initialLocalization.dart';
 
 export 'Point.dart';
+export 'LocalizationException.dart';
+
+export 'package:adapter_manager/AdapterException.dart';
 
 class LocalizationEngine {
   static const MethodChannel _methodChannel = MethodChannel('localization_engine');
@@ -14,6 +19,16 @@ class LocalizationEngine {
   static const EventChannel _gpsEventChannel = EventChannel('gps_scan_stream');
   static InitialLocalization? _localization;
   static final gpsBuffer = GPSBuffer();
+
+  static Future<Map<String, dynamic>> _checkAllStatus() async {
+    final result = await AdapterManager.setupAllPermissionsAndAdapters();
+    return result;
+    if (result['success']) {
+      // _showSnackBar('All setup complete!');
+    } else {
+      // _showSnackBar('${result['errors']}');
+    }
+  }
 
   static Future<void> _setVenue({required String venueName})async{
     _localization = InitialLocalization(venueName);
@@ -46,11 +61,16 @@ class LocalizationEngine {
     if (_isScanning) {
       throw StateError('Scanning is already in progress');
     }
-    await _setVenue(venueName: venueName);
-    _initializeScanning(frequency: frequency, bufferSize: bufferSize, timeout: timeout);
-    await _methodChannel.invokeMethod('startGpsScan');
-    await _methodChannel.invokeMethod('startScan');
-    _isScanning = true;
+    var adapterState = await _checkAllStatus();
+    if(adapterState['success']){
+      await _setVenue(venueName: venueName);
+      _initializeScanning(frequency: frequency, bufferSize: bufferSize, timeout: timeout);
+      await _methodChannel.invokeMethod('startGpsScan');
+      await _methodChannel.invokeMethod('startScan');
+      _isScanning = true;
+    }else{
+      throw AdapterException(adapterState['errors']);
+    }
   }
 
   static Future<void> stopScanning() async {
@@ -89,14 +109,13 @@ class LocalizationEngine {
       });
 
   static Future<Pt?> getCurrentLocation({required String venueName}) async {
-    await startScanning(
-      frequency: const Duration(seconds: 3),
-      bufferSize: const Duration(seconds: 6),
-      timeout: const Duration(seconds: 7),
-      venueName: venueName,
-    );
-
     try {
+      await startScanning(
+        frequency: const Duration(seconds: 3),
+        bufferSize: const Duration(seconds: 6),
+        timeout: const Duration(seconds: 7),
+        venueName: venueName,
+      );
       final gpsSubscription = _gpsEventChannel.receiveBroadcastStream().listen((data) {
         print(data);
         gpsBuffer.add(data['latitude'], data['longitude']);
@@ -131,19 +150,22 @@ class LocalizationEngine {
 
       // Clean up
       await gpsSubscription.cancel();
-      await stopScanning(); // Also add await here for consistency
 
       return await _localization?.findLocation(formattedData);
-    }on StateError catch (e) {
+    }on StateError{
       await stopScanning();
       List<double>? gpsLocation = gpsBuffer.getRobustPosition();
       print("gpsLocation $gpsLocation");
       if(gpsLocation != null && gpsLocation.isNotEmpty){
         return Pt(latitude: gpsLocation[0], longitude: gpsLocation[1]);
       }
+      throw LocalizationException("Unable to Find Your Location");
+    }on AdapterException{
+     rethrow;
+    }catch (_){
       return null;
-    }catch (e){
-      return null;
+    }finally{
+      await stopScanning();
     }
   }
 
