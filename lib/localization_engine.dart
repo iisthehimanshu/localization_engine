@@ -11,6 +11,7 @@ import 'initialLocalization.dart';
 export 'Point.dart';
 export 'LocalizationException.dart';
 
+export 'package:adapter_manager/adapter_manager.dart';
 export 'package:adapter_manager/AdapterException.dart';
 
 class LocalizationEngine {
