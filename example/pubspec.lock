@@ -4,11 +4,9 @@ packages:
   adapter_manager:
     dependency: transitive
     description:
-      path: "."
-      ref: main
-      resolved-ref: d8c4db1ec1f7616bd15f0e9bc5fd9af73821d98c
-      url: "https://github.com/iisthehimanshu/adaptermanager"
-    source: git
+      path: "../../../adapter_manager"
+      relative: true
+    source: path
     version: "0.0.1"
   app_settings:
     dependency: transitive

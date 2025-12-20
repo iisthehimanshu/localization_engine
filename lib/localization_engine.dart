@@ -63,6 +63,7 @@ class LocalizationEngine {
       throw StateError('Scanning is already in progress');
     }
     var adapterState = await _checkAllStatus();
+    print("adapterState $adapterState");
     if(adapterState['success']){
       await _setVenue(venueName: venueName);
       _initializeScanning(frequency: frequency, bufferSize: bufferSize, timeout: timeout);
