@@ -112,6 +112,36 @@ class LocalizationEngine {
         print('Stream error: $error');
       });
 
+  /// Stream to listen to periodic scan results
+  /// Listen to BLE scan results as a stream of list of devices
+  static Stream<Map<String, List<MapEntry<DateTime, int>>>?> get scanResultsForAllBeacons =>
+      _bleEventChannel.receiveBroadcastStream().asyncMap((event) async {
+        print("got event at ${DateTime.now()}");
+        try {
+          final List<dynamic> rawList = event as List;
+
+          final Map<String, List<MapEntry<DateTime, int>>> formattedData = {};
+
+          for (var entry in rawList) {
+            final map = Map<String, dynamic>.from(entry);
+            final device = map['name'] as String;
+            if(!device.toLowerCase().contains("iw")) continue;
+            final timestamp = DateTime.fromMillisecondsSinceEpoch(map['timestamp']);
+            final rssi = map['rssi'] as int;
+            // print("scanResults map $map");
+
+            formattedData.putIfAbsent(device, () => []);
+            formattedData[device]!.add(MapEntry(timestamp, rssi));
+          }
+          return _localization?.filterBeacons(formattedData);
+        } catch (e) {
+          print('Error processing scan result: $e');
+          return null; // or rethrow based on your needs
+        }
+      }).handleError((error) {
+        print('Stream error: $error');
+      });
+
   static Future<Pt?> getCurrentLocation({required String venueName}) async {
     try {
       await startScanning(

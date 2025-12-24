@@ -88,23 +88,26 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
   }
 
   // BLE Scanning Methods
+  private var isScanning = false
+
   private fun startScanning() {
+    isScanning = true
     scanBuffer.clear()
     val bluetoothLeScanner = bluetoothAdapter?.bluetoothLeScanner
 
     scanCallback = object : ScanCallback() {
       override fun onScanResult(callbackType: Int, result: ScanResult) {
+        if (!isScanning) return  // Safety check
+
         val deviceName =
           result.scanRecord?.deviceName
             ?: result.device.name
-            ?: return   // ignore unnamed devices
+            ?: return
 
         if (!deviceName.startsWith("IW", ignoreCase = true)) return
 
         val timestamp = System.currentTimeMillis()
         scanBuffer.add(Pair(timestamp, result))
-
-        // keep only bufferSize window
         scanBuffer.removeAll { it.first < timestamp - bufferSize }
       }
     }
@@ -113,6 +116,8 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
     scanTimerRunnable = object : Runnable {
       override fun run() {
+        if (!isScanning || eventSink == null) return  // Safety check
+
         val resultsMap = scanBuffer.map {
           mapOf(
             "device" to it.second.device.address,
@@ -121,9 +126,12 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             "timestamp" to it.first
           )
         }
-
+        Log.d("scanTimerRunnable", "Frequency: $frequency, sinking to stream")
         eventSink?.success(resultsMap)
-        mainHandler.postDelayed(this, frequency)
+
+        if (isScanning) {
+          mainHandler.postDelayed(this, frequency)
+        }
       }
     }
 
@@ -136,15 +144,29 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
   }
 
   private fun stopScanning() {
-    val bluetoothLeScanner = bluetoothAdapter?.bluetoothLeScanner
-    scanCallback?.let { bluetoothLeScanner?.stopScan(it) }
+    if (!isScanning) return  // Already stopped
 
+    isScanning = false
+
+    // Remove callbacks FIRST
     scanTimerRunnable?.let { mainHandler.removeCallbacks(it) }
     timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
 
+    // Stop the BLE scan
+    val bluetoothLeScanner = bluetoothAdapter?.bluetoothLeScanner
+    scanCallback?.let { bluetoothLeScanner?.stopScan(it) }
+
+    // Clear the buffer
+    scanBuffer.clear()
+
+    // End the stream
     eventSink?.endOfStream()
 
-    scanBuffer.clear()
+    // Clear references
+    scanTimerRunnable = null
+    timeoutRunnable = null
+
+    Log.d("stopScanning", "Scanning stopped completely")
   }
 
   // GPS Methods

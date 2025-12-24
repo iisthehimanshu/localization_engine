@@ -39,6 +39,19 @@ class _MyAppState extends State<MyApp> {
     }
   }
 
+  Future<void> _startPeakValley() async {
+    await _requestBluetoothPermission();
+    if (await Permission.bluetoothScan.isGranted &&
+        await Permission.bluetoothConnect.isGranted &&
+        await Permission.locationWhenInUse.isGranted) {
+      locationTracker.peakValley();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Bluetooth permission denied')),
+      );
+    }
+  }
+
   Future<Pt?> _getCurrentLocation() async {
     await _requestBluetoothPermission();
     if (await Permission.bluetoothScan.isGranted &&
@@ -68,6 +81,7 @@ class _MyAppState extends State<MyApp> {
         ),
         body: Center(
           child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               IconButton(
                 onPressed: _startTracking,
@@ -77,6 +91,18 @@ class _MyAppState extends State<MyApp> {
               IconButton(
                 onPressed: _getCurrentLocation,
                 icon: const Icon(Icons.my_location),
+              ),
+              SizedBox(height: 12,),
+              IconButton(
+                onPressed: _startPeakValley,
+                icon: const Icon(Icons.auto_graph),
+              ),
+              SizedBox(height: 12,),
+              IconButton(
+                onPressed: (){
+                  locationTracker.stop();
+                },
+                icon: const Icon(Icons.cancel),
               ),
             ],
           ),

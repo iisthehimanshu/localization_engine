@@ -17,6 +17,16 @@ class InitialLocalization{
     return DirectionalLocalisation().estimateIntersectionCenter(beaconData, _apibeaconmap, compassDirection??0.0);
   }
 
+  Map<String, List<MapEntry<DateTime, int>>>? filterBeacons(Map<String, List<MapEntry<DateTime, int>>> beaconList){
+    Map<String, List<MapEntry<DateTime, int>>> filteredList = Map();
+    beaconList.forEach((beaconName, data){
+      if(_apibeaconmap[beaconName] != null){
+        filteredList[beaconName] = data;
+      }
+    });
+    return filteredList;
+  }
+
   Future<HashMap<String, Beacon>> parseBeaconMap(String venueName) async {
     List<dynamic> beaconList = await beaconapi().fetchBeaconData(venueName);
     for (var beacon in beaconList) {
