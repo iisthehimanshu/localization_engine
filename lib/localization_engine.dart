@@ -146,7 +146,7 @@ class LocalizationEngine {
   static Future<Pt?> getCurrentLocation({required String venueName}) async {
     try {
       await startScanning(
-        frequency: const Duration(seconds: 3),
+        frequency: const Duration(seconds: 5),
         bufferSize: const Duration(seconds: 6),
         timeout: const Duration(seconds: 7),
         venueName: venueName,

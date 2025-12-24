@@ -58,7 +58,7 @@ class LocationTracker {
 
   Future<Pt?> getCurrentLocation() async {
     try{
-      return await LocalizationEngine.getCurrentLocation(venueName: 'Ashoka University');
+      return await LocalizationEngine.getCurrentLocation(venueName: 'IITDelhi');
     }catch (e){
       rethrow;
     }

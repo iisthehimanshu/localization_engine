@@ -4,6 +4,7 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   adapter_manager
+  flutter_blue_plus_winrt
   geolocator_windows
   permission_handler_windows
 )

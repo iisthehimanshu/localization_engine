@@ -97,7 +97,6 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
     scanCallback = object : ScanCallback() {
       override fun onScanResult(callbackType: Int, result: ScanResult) {
-        if (!isScanning) return  // Safety check
 
         val deviceName =
           result.scanRecord?.deviceName
@@ -108,6 +107,7 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
         val timestamp = System.currentTimeMillis()
         scanBuffer.add(Pair(timestamp, result))
+        Log.d("onScanResult", "onScanResult: $deviceName")
         scanBuffer.removeAll { it.first < timestamp - bufferSize }
       }
     }
@@ -116,7 +116,7 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
     scanTimerRunnable = object : Runnable {
       override fun run() {
-        if (!isScanning || eventSink == null) return  // Safety check
+        if (!isScanning) return  // Safety check
 
         val resultsMap = scanBuffer.map {
           mapOf(
@@ -126,7 +126,7 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             "timestamp" to it.first
           )
         }
-        Log.d("scanTimerRunnable", "Frequency: $frequency, sinking to stream")
+        Log.d("scanTimerRunnable", "Frequency: $frequency, $scanBuffer sinking to stream")
         eventSink?.success(resultsMap)
 
         if (isScanning) {
