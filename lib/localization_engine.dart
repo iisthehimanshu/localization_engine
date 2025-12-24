@@ -13,6 +13,7 @@ export 'LocalizationException.dart';
 
 export 'package:adapter_manager/adapter_manager.dart';
 export 'package:adapter_manager/AdapterException.dart';
+export 'package:adapter_manager/UI/LocationServicesDialog.dart';
 
 class LocalizationEngine {
   static const MethodChannel _methodChannel = MethodChannel('localization_engine');
