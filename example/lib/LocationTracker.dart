@@ -8,6 +8,7 @@ export 'package:localization_engine/Point.dart';
 class LocationTracker {
   StreamSubscription<Pt?>? _subscription;
   StreamSubscription<Map<String, List<MapEntry<DateTime, int>>>?>? _peakValleySubscription;
+  StreamSubscription<Map<String, dynamic>?>? _gpsSubscription;
 
   Future<void> start() async {
 
@@ -54,6 +55,14 @@ class LocationTracker {
       bufferSize: const Duration(seconds: 5), // Optional (Default Duration(seconds: 6))
       venueName: 'IITDelhi', // Required
     );
+  }
+
+  void startGpsStream(){
+    _gpsSubscription = LocalizationEngine.gpsStreamRaw.listen((data){
+      print("gpsStream $data");
+    });
+    
+    LocalizationEngine.startScanning(venueName: 'Ashoka University');
   }
 
   Future<Pt?> getCurrentLocation() async {

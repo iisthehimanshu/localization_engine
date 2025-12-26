@@ -200,15 +200,6 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
       )
       Log.d("GPS", "GPS location updates started")
     }
-
-            if (isNetworkEnabled) {
-            locationManager?.requestLocationUpdates(
-                LocationManager.NETWORK_PROVIDER,
-                1000,
-                0f,
-                locationListener
-            )
-        }
   }
 
   // Persistent LocationListener to prevent garbage collection

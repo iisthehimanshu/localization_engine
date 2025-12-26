@@ -143,6 +143,17 @@ class LocalizationEngine {
         print('Stream error: $error');
       });
 
+  static startGPSStream(){
+
+  }
+
+  static Stream<Map<String, dynamic>?> get gpsStreamRaw =>
+      _gpsEventChannel.receiveBroadcastStream().asyncMap((event) async {
+        return Map<String, dynamic>.from(event as Map);
+      }).handleError((error) {
+        print('gpsStreamRaw error: $error');
+      });
+
   static Future<Pt?> getCurrentLocation({required String venueName}) async {
     try {
       await startScanning(
