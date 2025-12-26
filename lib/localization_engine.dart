@@ -204,8 +204,9 @@ class LocalizationEngine {
       print("gpsLocation $gpsLocation");
       if(gpsLocation != null && gpsLocation.isNotEmpty){
         return Pt(latitude: gpsLocation[0], longitude: gpsLocation[1]);
+      }else{
+        return null;
       }
-      throw LocalizationException("Unable to Find Your Location");
     }on AdapterException{
      rethrow;
     }on PermissionException{
