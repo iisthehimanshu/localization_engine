@@ -3,6 +3,7 @@ import 'dart:developer';
 import 'package:adapter_manager/adapter_manager.dart';
 import 'package:flutter/services.dart';
 import 'package:localization_engine/src/GPS/GPSBuffer.dart';
+import 'package:localization_engine/src/network/api/localizationUsingMLModelapi.dart';
 
 import 'LocalizationException.dart';
 import 'Point.dart';
@@ -39,13 +40,13 @@ class LocalizationEngine {
 
   /// Initialize scanning with custom params
   static Future<void> _initializeScanning({
-    required Duration frequency,
-    required Duration bufferSize,
+    required Duration? frequency,
+    required Duration? bufferSize,
     required Duration? timeout, // null means no timeout
   }) async {
     final params = {
-      'frequency': frequency.inMilliseconds,
-      'bufferSize': bufferSize.inMilliseconds,
+      'frequency': frequency?.inMilliseconds,
+      'bufferSize': bufferSize?.inMilliseconds,
       'timeout': timeout?.inMilliseconds,
     };
     await _methodChannel.invokeMethod('initializeScan', params);
@@ -55,8 +56,8 @@ class LocalizationEngine {
   static bool get isScanning => _isScanning;
 
   static Future<void> startScanning({
-     Duration frequency = const Duration(seconds: 6),
-     Duration bufferSize = const Duration(seconds: 6),
+     Duration? frequency,
+     Duration? bufferSize,
      Duration? timeout, // null means no timeout
      required String venueName
   }) async {
@@ -117,7 +118,6 @@ class LocalizationEngine {
   /// Listen to BLE scan results as a stream of list of devices
   static Stream<Map<String, List<MapEntry<DateTime, int>>>?> get scanResultsForAllBeacons =>
       _bleEventChannel.receiveBroadcastStream().asyncMap((event) async {
-        print("got event at ${DateTime.now()}");
         try {
           final List<dynamic> rawList = event as List;
 
@@ -134,6 +134,7 @@ class LocalizationEngine {
             formattedData.putIfAbsent(device, () => []);
             formattedData[device]!.add(MapEntry(timestamp, rssi));
           }
+          return formattedData;
           return _localization?.filterBeacons(formattedData);
         } catch (e) {
           print('Error processing scan result: $e');
@@ -143,8 +144,10 @@ class LocalizationEngine {
         print('Stream error: $error');
       });
 
-  static startGPSStream(){
-
+  static Future<dynamic> localizeUsingMLModelApiCall(Map<String, double> values) async {
+    print("localizeUsingMLModel $values");
+    dynamic result = await Localizationusingmlmodelapi().localize(values);
+    return result;
   }
 
   static Stream<Map<String, dynamic>?> get gpsStreamRaw =>

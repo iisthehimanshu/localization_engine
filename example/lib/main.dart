@@ -31,7 +31,7 @@ class _MyAppState extends State<MyApp> {
     if (await Permission.bluetoothScan.isGranted &&
         await Permission.bluetoothConnect.isGranted &&
         await Permission.locationWhenInUse.isGranted) {
-      locationTracker.start();
+      locationTracker.startTracking();
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Bluetooth permission denied')),

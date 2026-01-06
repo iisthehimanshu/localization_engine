@@ -32,8 +32,8 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
   private var scanCallback: ScanCallback? = null
   private var mainHandler = Handler(Looper.getMainLooper())
 
-  private var frequency: Long = 1000L // default 1 second
-  private var bufferSize: Long = 5000L // default 5 seconds
+  private var frequency: Long? = null
+  private var bufferSize: Long? = null
   private var timeout: Long? = null
 
   private var scanBuffer = mutableListOf<Pair<Long, ScanResult>>()
@@ -62,7 +62,7 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
   override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
     when (call.method) {
       "initializeScan" -> {
-        frequency = call.argument<Int>("frequency")?.toLong() ?: 5000L
+        frequency = call.argument<Int>("frequency")?.toLong() ?: null
         bufferSize = call.argument<Int>("bufferSize")?.toLong() ?: 5000L
         timeout = call.argument<Int?>("timeout")?.toLong()
         result.success(null)
@@ -106,36 +106,53 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         if (!deviceName.startsWith("IW", ignoreCase = true)) return
 
         val timestamp = System.currentTimeMillis()
-        scanBuffer.add(Pair(timestamp, result))
-        Log.d("onScanResult", "onScanResult: $deviceName")
-        scanBuffer.removeAll { it.first < timestamp - bufferSize }
+
+        // If frequency is null, emit immediately
+        if (frequency == null) {
+          val resultMap = mapOf(
+            "device" to result.device.address,
+            "name" to deviceName,
+            "rssi" to result.rssi,
+            "timestamp" to timestamp
+          )
+          eventSink?.success(listOf(resultMap))
+        } else {
+          // Otherwise, buffer for periodic emission
+          scanBuffer.add(Pair(timestamp, result))
+          if (bufferSize != null){
+            scanBuffer.removeAll { it.first < timestamp - bufferSize!! }
+          }
+        }
       }
     }
 
     bluetoothLeScanner?.startScan(scanCallback)
 
-    scanTimerRunnable = object : Runnable {
-      override fun run() {
-        if (!isScanning) return  // Safety check
+    // Only set up timer if frequency is not null
+    if (frequency != null) {
+      scanTimerRunnable = object : Runnable {
+        override fun run() {
+          if (!isScanning) return  // Safety check
 
-        val resultsMap = scanBuffer.map {
-          mapOf(
-            "device" to it.second.device.address,
-            "name" to (it.second.scanRecord?.deviceName ?: it.second.device.name ?: "Unknown"),
-            "rssi" to it.second.rssi,
-            "timestamp" to it.first
-          )
-        }
-        Log.d("scanTimerRunnable", "Frequency: $frequency, $scanBuffer sinking to stream")
-        eventSink?.success(resultsMap)
+          val resultsMap = scanBuffer.map {
+            mapOf(
+              "device" to it.second.device.address,
+              "name" to (it.second.scanRecord?.deviceName ?: it.second.device.name ?: "Unknown"),
+              "rssi" to it.second.rssi,
+              "timestamp" to it.first
+            )
+          }
+          Log.d("scanTimerRunnable", "Frequency: $frequency, $scanBuffer sinking to stream")
+          eventSink?.success(resultsMap)
 
-        if (isScanning) {
-          mainHandler.postDelayed(this, frequency)
+          if (isScanning) {
+            mainHandler.postDelayed(this, frequency!!)
+          }
         }
       }
-    }
 
-    mainHandler.post(scanTimerRunnable!!)
+      mainHandler.post(scanTimerRunnable!!)
+    }
 
     timeout?.let {
       timeoutRunnable = Runnable { stopScanning() }

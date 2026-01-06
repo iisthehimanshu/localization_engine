@@ -7,10 +7,12 @@ export 'package:localization_engine/Point.dart';
 
 class LocationTracker {
   StreamSubscription<Pt?>? _subscription;
-  StreamSubscription<Map<String, List<MapEntry<DateTime, int>>>?>? _peakValleySubscription;
+  StreamSubscription<Map<String, List<MapEntry<DateTime, int>>>?>? _allBeaconSubscription;
   StreamSubscription<Map<String, dynamic>?>? _gpsSubscription;
 
-  Future<void> start() async {
+  Map<String, List<MapEntry<DateTime, int>>> beaconScan = {};
+
+  Future<void> startTracking() async {
 
     // 1. Listen to position updates
     _subscription = LocalizationEngine.scanResults.listen(
@@ -30,14 +32,64 @@ class LocationTracker {
       frequency: const Duration(seconds: 6), // Optional (Default Duration(seconds: 6))
       bufferSize: const Duration(seconds: 6), // Optional (Default Duration(seconds: 6))
       timeout: const Duration(minutes: 5),
-      venueName: 'Ashoka University', // Required
+      venueName: 'IITDelhi', // Required
     );
+  }
+
+  Future<void> startBluetoothScanning() async {
+
+    // 1. Listen to position updates
+    _allBeaconSubscription = LocalizationEngine.scanResultsForAllBeacons.listen(
+          (beacon) {
+        if (beacon != null) {
+          beacon.forEach((beaconName, list){
+            beaconScan.putIfAbsent(beaconName, ()=>[]);
+            beaconScan[beaconName]!.addAll(list);
+          });
+          log('beacon: $beacon \n\n\n\n');
+          // Update UI with new position
+        }
+      },
+      onError: (error) {
+        print('beacon error: $error');
+      },
+    );
+
+    // 2. Start scanning
+    await LocalizationEngine.startScanning(
+      venueName: 'IITDelhi', // Required
+    );
+  }
+
+  Future<dynamic> localize() async {
+
+    stop();
+
+    double average(List<MapEntry<DateTime, int>> entries) {
+      if (entries.isEmpty) return 0;
+
+      final int sum = entries.fold(
+        0,
+            (total, entry) => total + entry.value,
+      );
+
+      return sum / entries.length;
+    }
+
+    Map<String, double> values = Map();
+    beaconScan.forEach((beaconName, list){
+      values[beaconName] = average(list);
+    });
+    log("localize values $values");
+    beaconScan.clear();
+    var result = await LocalizationEngine.localizeUsingMLModelApiCall(values);
+    return result;
   }
 
   Future<void> peakValley() async {
 
     // 1. Listen to position updates
-    _peakValleySubscription = LocalizationEngine.scanResultsForAllBeacons.listen(
+    _allBeaconSubscription = LocalizationEngine.scanResultsForAllBeacons.listen(
           (position) {
         if (position != null) {
           log('peakValley position: $position \n\n\n\n');
@@ -62,7 +114,7 @@ class LocationTracker {
       print("gpsStream $data");
     });
     
-    LocalizationEngine.startScanning(venueName: 'Ashoka University');
+    LocalizationEngine.startScanning(venueName: 'IITDelhi');
   }
 
   Future<Pt?> getCurrentLocation() async {
@@ -79,7 +131,7 @@ class LocationTracker {
 
     // Cancel subscription
     await _subscription?.cancel();
-    await _peakValleySubscription?.cancel();
+    await _allBeaconSubscription?.cancel();
 
     // Cleanup resources
     await LocalizationEngine.dispose();

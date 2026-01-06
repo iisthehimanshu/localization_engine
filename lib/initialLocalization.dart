@@ -1,5 +1,6 @@
 import 'dart:collection';
 import 'package:flutter_compass/flutter_compass.dart';
+import 'package:localization_engine/src/network/api/localizationUsingMLModelapi.dart';
 import 'Point.dart';
 import 'src/network/api/beaconapi.dart';
 import 'src/network/model/beaconData.dart';
@@ -40,5 +41,11 @@ class InitialLocalization{
   Future<double?> _getCurrentCompassHeading() async {
     final compassEvent = await FlutterCompass.events!.first;
     return compassEvent.heading; // in degrees, 0-360
+  }
+
+  Future<dynamic> localizeUsingMLModel(Map<String, double> values) async {
+    print("localizeUsingMLModel $values");
+    dynamic result = await Localizationusingmlmodelapi().localize(values);
+    return result;
   }
 }
