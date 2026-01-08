@@ -18,6 +18,11 @@ class InitialLocalization{
     return DirectionalLocalisation().estimateIntersectionCenter(beaconData, _apibeaconmap, compassDirection??0.0);
   }
 
+  Pt bestBeacon(String beaconName){
+    Beacon? beacon = _apibeaconmap![beaconName];
+    return Pt(beacon: beacon!,x: beacon.coordinateX!.toDouble(),y: beacon.coordinateY!.toDouble());
+  }
+
   Map<String, List<MapEntry<DateTime, int>>>? filterBeacons(Map<String, List<MapEntry<DateTime, int>>> beaconList){
     Map<String, List<MapEntry<DateTime, int>>> filteredList = Map();
     beaconList.forEach((beaconName, data){

@@ -197,10 +197,31 @@ class LocalizationEngine {
         formattedData[device]!.add(MapEntry(timestamp, rssi));
       }
 
+      String? bestBeacon;
+      double bestAvg = double.negativeInfinity;
+
+      formattedData.forEach((beaconId, entries) {
+        if (entries.isEmpty) return;
+
+        final avg = entries
+            .map((e) => e.value)
+            .reduce((a, b) => a + b) /
+            entries.length;
+
+        if (avg > bestAvg) {
+          bestAvg = avg;
+          bestBeacon = beaconId;
+        }
+      });
+      if(bestAvg>-90){
+        return null;
+      }
+      print("nearestBeacon:${bestBeacon} ${bestAvg}");
+
       // Clean up
       await gpsSubscription.cancel();
 
-      return await _localization?.findLocation(formattedData);
+      return await _localization?.bestBeacon(bestBeacon!);
     }on StateError{
       await stopScanning();
       List<double>? gpsLocation = gpsBuffer.getRobustPosition();
