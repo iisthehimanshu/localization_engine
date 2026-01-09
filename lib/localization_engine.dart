@@ -213,7 +213,7 @@ class LocalizationEngine {
           bestBeacon = beaconId;
         }
       });
-      if(bestAvg>=-90){
+      if(bestAvg<=-90){
         return null;
       }
       print("nearestBeacon:${bestBeacon} ${bestAvg}");
