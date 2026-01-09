@@ -213,10 +213,12 @@ class LocalizationEngine {
           bestBeacon = beaconId;
         }
       });
+
       if(bestAvg<=-90){
+        log("nearestBeacon:${bestBeacon} ${bestAvg}");
         return null;
       }
-      print("nearestBeacon:${bestBeacon} ${bestAvg}");
+
 
       // Clean up
       await gpsSubscription.cancel();
