@@ -86,13 +86,22 @@ class LocationTracker {
     return result;
   }
 
+  List<Map<String, List<int>>> peakValleyList = [];
+
   Future<void> peakValley() async {
 
     // 1. Listen to position updates
     _allBeaconSubscription = LocalizationEngine.scanResultsForAllBeacons.listen(
-          (position) {
-        if (position != null) {
-          log('peakValley position: $position \n\n\n\n');
+          (rawBeaconList) {
+        if (rawBeaconList != null) {
+          var beaconData = rawBeaconList.map(
+                (key, value) => MapEntry(
+              key,
+              value.map((e) => e.value).toList(),
+            ),
+          );
+          peakValleyList.add(beaconData);
+          log('peakValley position: $rawBeaconList \n\n\n\n');
           // Update UI with new position
         }
       },
@@ -103,8 +112,8 @@ class LocationTracker {
 
     // 2. Start scanning
     await LocalizationEngine.startScanning(
-      frequency: const Duration(seconds: 5), // Optional (Default Duration(seconds: 6))
-      bufferSize: const Duration(seconds: 5), // Optional (Default Duration(seconds: 6))
+      frequency: const Duration(seconds: 2), // Optional (Default Duration(seconds: 6))
+      bufferSize: const Duration(seconds: 2), // Optional (Default Duration(seconds: 6))
       venueName: 'IITDelhi', // Required
     );
   }
@@ -128,7 +137,8 @@ class LocationTracker {
   Future<void> stop() async {
     // Stop scanning
     await LocalizationEngine.stopScanning();
-
+    log(peakValleyList.toString());
+    peakValleyList.clear();
     // Cancel subscription
     await _subscription?.cancel();
     await _allBeaconSubscription?.cancel();

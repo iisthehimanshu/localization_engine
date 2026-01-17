@@ -198,28 +198,29 @@ class LocalizationEngine {
       }
 
       String? bestBeacon;
-      double bestAvg = double.negativeInfinity;
+      double bestAvg = double.infinity;
 
       formattedData.forEach((beaconId, entries) {
         if (entries.isEmpty) return;
 
-        final avg = entries
+        var avg = entries
             .map((e) => e.value)
             .reduce((a, b) => a + b) /
             entries.length;
 
-        if (avg > bestAvg) {
+        avg = avg.abs();
+
+        if (avg < bestAvg) {
           bestAvg = avg;
           bestBeacon = beaconId;
         }
       });
 
-      if(bestAvg<=-90){
-        log("nearestBeacon:${bestBeacon} ${bestAvg}");
+      log("nearestBeacon:${bestBeacon} ${bestAvg}");
+
+      if(bestAvg >= 90){
         return null;
       }
-
-
       // Clean up
       await gpsSubscription.cancel();
 
