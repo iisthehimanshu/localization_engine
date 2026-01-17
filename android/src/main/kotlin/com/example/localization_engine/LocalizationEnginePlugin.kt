@@ -134,6 +134,14 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         override fun run() {
           if (!isScanning) return  // Safety check
 
+          // code for bluetooth off during scanning
+          val isBluetoothEnabled = bluetoothAdapter?.isEnabled ?: false
+          if (!isBluetoothEnabled) {
+            Log.w("BluetoothCheck", "Bluetooth is OFF - stopping scan")
+            stopScanning()
+            return
+          }
+
           val resultsMap = scanBuffer.map {
             mapOf(
               "device" to it.second.device.address,
