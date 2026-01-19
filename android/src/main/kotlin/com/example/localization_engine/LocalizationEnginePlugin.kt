@@ -150,7 +150,6 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
               "timestamp" to it.first
             )
           }
-          Log.d("scanTimerRunnable", "Frequency: $frequency, $scanBuffer sinking to stream")
           eventSink?.success(resultsMap)
 
           if (isScanning) {
