@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
@@ -119,14 +120,23 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         } else {
           // Otherwise, buffer for periodic emission
           scanBuffer.add(Pair(timestamp, result))
-          if (bufferSize != null){
-            scanBuffer.removeAll { it.first < timestamp - bufferSize!! }
-          }
+//          if (bufferSize != null){
+//            scanBuffer.removeAll { it.first < timestamp - bufferSize!! }
+//          }
         }
       }
     }
 
-    bluetoothLeScanner?.startScan(scanCallback)
+    // Configure scan settings for faster beacon detection
+    val scanSettings = ScanSettings.Builder()
+      .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)  // Fastest scan mode - uses more battery but detects beacons quickly
+      .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)  // Report all advertisements immediately
+      .setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)  // More aggressive matching for faster detection
+      .setNumOfMatches(ScanSettings.MATCH_NUM_MAX_ADVERTISEMENT)  // Report maximum number of advertisements
+      .setReportDelay(0L)  // No delay - report results immediately
+      .build()
+
+    bluetoothLeScanner?.startScan(null, scanSettings, scanCallback)
 
     // Only set up timer if frequency is not null
     if (frequency != null) {
@@ -150,6 +160,7 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
               "timestamp" to it.first
             )
           }
+          scanBuffer.clear();
           eventSink?.success(resultsMap)
 
           if (isScanning) {

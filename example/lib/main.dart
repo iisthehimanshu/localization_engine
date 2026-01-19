@@ -1,4 +1,8 @@
+import 'dart:async';
+import 'dart:developer';
+
 import 'package:flutter/material.dart';
+import 'package:localization_engine/localization_engine.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'LocationTracker.dart';
 
@@ -64,6 +68,37 @@ class _MyAppState extends State<MyApp> {
       );
     }
   }
+
+  StreamSubscription<Map<String, List<MapEntry<DateTime, int>>>?>? _allBeaconSubscription;
+
+  final StreamController<Map<String, List<int>>> beaconStreamController =
+  StreamController.broadcast();
+
+  Future<void> peakValley() async {
+    _allBeaconSubscription =
+        LocalizationEngine.scanResultsForAllBeacons.listen(
+              (rawBeaconList) {
+            if (rawBeaconList == null) return;
+
+            final beaconData = rawBeaconList.map(
+                  (key, value) => MapEntry(
+                key,
+                value.map((e) => e.value).toList(),
+              ),
+            );
+
+            beaconStreamController.add(beaconData);
+          },
+          onError: (e) => log('Localization error: $e'),
+        );
+
+    await LocalizationEngine.startScanning(
+      frequency: const Duration(seconds: 2),
+      bufferSize: const Duration(seconds: 2),
+      venueName: 'IITDelhi',
+    );
+  }
+
 
   Future<Pt?> _getCurrentLocation() async {
     await _requestBluetoothPermission();
