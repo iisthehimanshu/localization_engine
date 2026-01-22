@@ -120,9 +120,9 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         } else {
           // Otherwise, buffer for periodic emission
           scanBuffer.add(Pair(timestamp, result))
-//          if (bufferSize != null){
-//            scanBuffer.removeAll { it.first < timestamp - bufferSize!! }
-//          }
+          if (bufferSize != null){
+            scanBuffer.removeAll { it.first < timestamp - bufferSize!! }
+          }
         }
       }
     }
@@ -160,7 +160,6 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
               "timestamp" to it.first
             )
           }
-          scanBuffer.clear();
           eventSink?.success(resultsMap)
 
           if (isScanning) {

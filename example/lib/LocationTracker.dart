@@ -112,8 +112,8 @@ class LocationTracker {
 
     // 2. Start scanning
     await LocalizationEngine.startScanning(
-      frequency: const Duration(seconds: 2), // Optional (Default Duration(seconds: 6))
-      bufferSize: const Duration(seconds: 2), // Optional (Default Duration(seconds: 6))
+      frequency: const Duration(seconds: 1), // Optional (Default Duration(seconds: 6))
+      bufferSize: const Duration(seconds: 5), // Optional (Default Duration(seconds: 6))
       venueName: 'Mapmyindia', // Required
     );
   }
