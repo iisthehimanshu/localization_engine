@@ -266,6 +266,7 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
   private fun stopLocationUpdates() {
     locationManager?.removeUpdates(locationListener)
     Log.d("GPS", "Location updates stopped")
+    Log.d("GPS", "Stack trace:", Exception())
   }
 
   // BLE Stream Handler

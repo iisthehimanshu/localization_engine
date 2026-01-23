@@ -166,7 +166,7 @@ class LocalizationEngine {
         venueName: venueName,
       );
       final gpsSubscription = _gpsEventChannel.receiveBroadcastStream().listen((data) {
-        print(data);
+        print("gpsSubscription $data");
         gpsBuffer.add(data['latitude'], data['longitude']);
         },
           onError: (error) {
@@ -219,7 +219,13 @@ class LocalizationEngine {
       log("nearestBeacon:${bestBeacon} ${bestAvg}");
 
       if(bestAvg >= 90){
-        return null;
+        List<double>? gpsLocation = gpsBuffer.getRobustPosition();
+        print("gpsLocation $gpsLocation");
+        if(gpsLocation != null && gpsLocation.isNotEmpty){
+          return Pt(latitude: gpsLocation[0], longitude: gpsLocation[1]);
+        }else{
+          return null;
+        }
       }
       // Clean up
       await gpsSubscription.cancel();
