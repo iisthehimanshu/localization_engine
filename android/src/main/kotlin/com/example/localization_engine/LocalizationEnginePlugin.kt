@@ -282,11 +282,12 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
   inner class GpsStreamHandler : EventChannel.StreamHandler {
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
       gpsEventSink = events
+      Log.d("GPS", "Stream listener attached")
     }
 
     override fun onCancel(arguments: Any?) {
       gpsEventSink = null
-      stopLocationUpdates()
+//      stopLocationUpdates()
     }
   }
 

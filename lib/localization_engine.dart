@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:developer';
 
 import 'package:adapter_manager/adapter_manager.dart';
@@ -21,6 +22,7 @@ class LocalizationEngine {
   static const EventChannel _bleEventChannel = EventChannel('ble_scan_stream');
   static const EventChannel _gpsEventChannel = EventChannel('gps_scan_stream');
   static InitialLocalization? _localization;
+  static StreamSubscription<dynamic>? _gpsSubscription;
   static final gpsBuffer = GPSBuffer();
 
   static Future<Map<String, dynamic>> _checkAllStatus() async {
@@ -165,13 +167,19 @@ class LocalizationEngine {
         timeout: const Duration(seconds: 7),
         venueName: venueName,
       );
-      final gpsSubscription = _gpsEventChannel.receiveBroadcastStream().listen((data) {
+
+      await _gpsSubscription?.cancel();
+
+
+      _gpsSubscription = _gpsEventChannel.receiveBroadcastStream().listen((data) {
         print("gpsSubscription $data");
         gpsBuffer.add(data['latitude'], data['longitude']);
-        },
+      },
           onError: (error) {
-        print('GPS stream error: $error');
-      });
+            print('GPS stream error: $error');
+          });
+
+      print("gpsSubscription:${_gpsSubscription}");
 
       // Wait for BLE event
       final event = await _bleEventChannel
@@ -228,7 +236,7 @@ class LocalizationEngine {
         }
       }
       // Clean up
-      await gpsSubscription.cancel();
+
 
       return await _localization?.bestBeacon(bestBeacon!);
     }on StateError{
