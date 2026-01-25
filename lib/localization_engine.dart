@@ -226,7 +226,8 @@ class LocalizationEngine {
 
       log("nearestBeacon:${bestBeacon} ${bestAvg}");
 
-      if(bestAvg >= 90){
+      if(bestAvg >= 85){
+        print("inside waypoint");
         List<double>? gpsLocation = gpsBuffer.getRobustPosition();
         print("gpsLocation $gpsLocation");
         if(gpsLocation != null && gpsLocation.isNotEmpty){
