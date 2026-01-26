@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:developer';
 
 import 'package:adapter_manager/adapter_manager.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
 import 'package:localization_engine/src/GPS/GPSBuffer.dart';
 import 'package:localization_engine/src/network/api/localizationUsingMLModelapi.dart';
@@ -187,7 +188,16 @@ class LocalizationEngine {
           .where((event) => event is List && event.isNotEmpty)
           .first;
 
-      log("getCurrentLocation event $event");
+
+      // log("getCurrentLocation event $event");
+        for (final e in event) {
+          debugPrint(
+            'device: ${e['device']}, '
+                'name: ${e['name']}, '
+                'rssi: ${e['rssi']}, '
+                'timestamp: ${e['timestamp']}',
+          );
+        }
 
       final List<dynamic> rawList = event as List;
       final Map<String, List<MapEntry<DateTime, int>>> formattedData = {};
