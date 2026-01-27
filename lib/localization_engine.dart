@@ -190,7 +190,7 @@ class LocalizationEngine {
       log("getCurrentLocation event $event");
 
       final List<dynamic> rawList = event as List;
-      final Map<String, List<MapEntry<DateTime, int>>> formattedData = {};
+      Map<String, List<MapEntry<DateTime, int>>> formattedData = {};
 
       for (var entry in rawList) {
         final map = Map<String, dynamic>.from(entry);
@@ -203,6 +203,10 @@ class LocalizationEngine {
 
         formattedData.putIfAbsent(device, () => []);
         formattedData[device]!.add(MapEntry(timestamp, rssi));
+      }
+
+      if(_localization != null){
+        formattedData = _localization!.filterBeacons(formattedData);
       }
 
       String? bestBeacon;
@@ -226,19 +230,20 @@ class LocalizationEngine {
 
       log("nearestBeacon:${bestBeacon} ${bestAvg}");
 
-      if(bestAvg >= 90){
-        List<double>? gpsLocation = gpsBuffer.getRobustPosition();
-        print("gpsLocation $gpsLocation");
-        if(gpsLocation != null && gpsLocation.isNotEmpty){
-          return Pt(latitude: gpsLocation[0], longitude: gpsLocation[1]);
-        }else{
-          return null;
-        }
+      Pt? gps;
+      Pt? beacon;
+
+      List<double>? gpsLocation = gpsBuffer.getRobustPosition();
+      print("gpsLocation $gpsLocation");
+      if(gpsLocation != null && gpsLocation.isNotEmpty){
+        gps = Pt(latitude: gpsLocation[0], longitude: gpsLocation[1]);
       }
-      // Clean up
 
+      if(bestAvg < 90){
+        beacon = await _localization?.bestBeacon(bestBeacon!);
+      }
 
-      return await _localization?.bestBeacon(bestBeacon!);
+      return Pt(beacon: beacon?.beacon, x: beacon?.x, y: beacon?.y, latitude: gps?.latitude, longitude: gps?.longitude);
     }on StateError{
       await stopScanning();
       List<double>? gpsLocation = gpsBuffer.getRobustPosition();

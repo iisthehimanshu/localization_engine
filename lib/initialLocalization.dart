@@ -23,7 +23,8 @@ class InitialLocalization{
     return Pt(beacon: beacon!,x: beacon.coordinateX!.toDouble(),y: beacon.coordinateY!.toDouble());
   }
 
-  Map<String, List<MapEntry<DateTime, int>>>? filterBeacons(Map<String, List<MapEntry<DateTime, int>>> beaconList){
+  Map<String, List<MapEntry<DateTime, int>>> filterBeacons(Map<String, List<MapEntry<DateTime, int>>> beaconList){
+    if(_apibeaconmap.isEmpty) return beaconList;
     Map<String, List<MapEntry<DateTime, int>>> filteredList = Map();
     beaconList.forEach((beaconName, data){
       if(_apibeaconmap[beaconName] != null){
@@ -34,6 +35,7 @@ class InitialLocalization{
   }
 
   Future<HashMap<String, Beacon>> parseBeaconMap(String venueName) async {
+    if(_venueName == venueName && _apibeaconmap.isNotEmpty) return _apibeaconmap;
     List<dynamic> beaconList = await beaconapi().fetchBeaconData(venueName);
     for (var beacon in beaconList) {
       if (beacon.name != null) {
