@@ -43,6 +43,19 @@ class _MyAppState extends State<MyApp> {
     }
   }
 
+  Future<void> _startImmediateBeaconScan() async {
+    await _requestBluetoothPermission();
+    if (await Permission.bluetoothScan.isGranted &&
+        await Permission.bluetoothConnect.isGranted &&
+        await Permission.locationWhenInUse.isGranted) {
+      locationTracker.scanForRawBluetooth();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Bluetooth permission denied')),
+      );
+    }
+  }
+
   Future<void> _startGPSStream() async {
     await _requestBluetoothPermission();
     if (await Permission.bluetoothScan.isGranted &&
@@ -149,6 +162,11 @@ class _MyAppState extends State<MyApp> {
               IconButton(
                 onPressed: _startPeakValley,
                 icon: const Icon(Icons.auto_graph),
+              ),
+              SizedBox(height: 12,),
+              IconButton(
+                onPressed: _startImmediateBeaconScan,
+                icon: const Icon(Icons.bluetooth_searching_sharp),
               ),
               SizedBox(height: 12,),
               IconButton(

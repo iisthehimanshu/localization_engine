@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:developer';
+import 'dart:io';
+import 'package:csv/csv.dart';
 import 'package:localization_engine/localization_engine.dart';
+import 'package:path_provider/path_provider.dart';
 
 export 'package:localization_engine/Point.dart';
 
@@ -8,7 +11,10 @@ export 'package:localization_engine/Point.dart';
 class LocationTracker {
   StreamSubscription<Pt?>? _subscription;
   StreamSubscription<Map<String, List<MapEntry<DateTime, int>>>?>? _allBeaconSubscription;
+  StreamSubscription<Map<String, dynamic>?>? rawBluetoothScanResults;
   StreamSubscription<Map<String, dynamic>?>? _gpsSubscription;
+
+  String venueName = "IITDelhi";
 
   Map<String, List<MapEntry<DateTime, int>>> beaconScan = {};
 
@@ -32,7 +38,7 @@ class LocationTracker {
       frequency: const Duration(seconds: 6), // Optional (Default Duration(seconds: 6))
       bufferSize: const Duration(seconds: 6), // Optional (Default Duration(seconds: 6))
       timeout: const Duration(minutes: 5),
-      venueName: 'IITDelhi', // Required
+      venueName: venueName, // Required
     );
   }
 
@@ -57,7 +63,7 @@ class LocationTracker {
 
     // 2. Start scanning
     await LocalizationEngine.startScanning(
-      venueName: 'IITDelhi', // Required
+      venueName: venueName, // Required
     );
   }
 
@@ -114,21 +120,65 @@ class LocationTracker {
     await LocalizationEngine.startScanning(
       frequency: const Duration(seconds: 1), // Optional (Default Duration(seconds: 6))
       bufferSize: const Duration(seconds: 5), // Optional (Default Duration(seconds: 6))
-      venueName: 'Mapmyindia', // Required
+      venueName: venueName, // Required
     );
   }
+
+  List<Map<String, dynamic>> bleDataList = [];
+  Future<void> scanForRawBluetooth()async{
+    rawBluetoothScanResults = LocalizationEngine.rawBluetoothScanResults.listen((event){
+      print("ble scan result $event \n");
+      if(event != null){
+        bleDataList.add(Map<String, dynamic>.from(event));
+      }
+    });
+    await LocalizationEngine.startScanning(
+      immediateEmit: true,
+      venueName: venueName, // Required
+    );
+  }
+
+  Future<void> saveBleDataToCsv() async {
+    if (bleDataList.isEmpty) return;
+
+    final headers = bleDataList.first.keys.toList();
+
+    final rows = bleDataList.map((map) {
+      return headers.map((key) => map[key]?.toString() ?? "").toList();
+    }).toList();
+
+    final csvData = [headers, ...rows];
+    final csvString = const ListToCsvConverter().convert(csvData);
+
+    Directory? directory;
+
+    if (Platform.isAndroid) {
+      directory = Directory('/storage/emulated/0/Download');
+    } else if (Platform.isIOS) {
+      directory = await getApplicationDocumentsDirectory(); // iOS has no Downloads folder
+    }
+
+    final file = File('${directory!.path}/ble_scan_data_${DateTime.now().millisecondsSinceEpoch}.csv');
+
+    await file.writeAsString(csvString);
+
+    print("✅ CSV saved in Downloads: ${file.path}");
+
+    bleDataList.clear();
+  }
+
 
   void startGpsStream(){
     _gpsSubscription = LocalizationEngine.gpsStreamRaw.listen((data){
       print("gpsStream $data");
     });
     
-    LocalizationEngine.startScanning(venueName: 'IITDelhi');
+    LocalizationEngine.startScanning(venueName: venueName);
   }
 
   Future<Pt?> getCurrentLocation() async {
     try{
-      return await LocalizationEngine.getCurrentLocation(venueName: 'IITDelhi');
+      return await LocalizationEngine.getCurrentLocation(venueName: venueName);
     }catch (e){
       rethrow;
     }
@@ -142,7 +192,7 @@ class LocationTracker {
     // Cancel subscription
     await _subscription?.cancel();
     await _allBeaconSubscription?.cancel();
-
+    saveBleDataToCsv();
     // Cleanup resources
     await LocalizationEngine.dispose();
   }

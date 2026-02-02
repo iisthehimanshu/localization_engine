@@ -36,6 +36,7 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
   private var frequency: Long? = null
   private var bufferSize: Long? = null
   private var timeout: Long? = null
+  private var immediateEmit: Boolean = false  // NEW: Option to emit immediately
 
   private var scanBuffer = mutableListOf<Pair<Long, ScanResult>>()
   private var scanTimerRunnable: Runnable? = null
@@ -66,6 +67,7 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         frequency = call.argument<Int>("frequency")?.toLong() ?: null
         bufferSize = call.argument<Int>("bufferSize")?.toLong() ?: 5000L
         timeout = call.argument<Int?>("timeout")?.toLong()
+        immediateEmit = call.argument<Boolean>("immediateEmit") ?: false  // NEW: Get immediateEmit parameter
         result.success(null)
       }
       "startScan" -> {
@@ -107,22 +109,34 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         if (!deviceName.startsWith("IW", ignoreCase = true)) return
 
         val timestamp = System.currentTimeMillis()
+        val dateTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.getDefault()).format(java.util.Date(System.currentTimeMillis()))
 
-        // If frequency is null, emit immediately
-        if (frequency == null) {
+        // NEW: Emit immediately if immediateEmit is true
+        if (immediateEmit) {
           val resultMap = mapOf(
             "device" to result.device.address,
             "name" to deviceName,
             "rssi" to result.rssi,
-            "timestamp" to timestamp
+            "timestamp" to dateTime
           )
           eventSink?.success(listOf(resultMap))
-        } else {
-          // Otherwise, buffer for periodic emission
+        }
+
+        // Always buffer if frequency is set (for periodic emission)
+        if (frequency != null) {
           scanBuffer.add(Pair(timestamp, result))
-          if (bufferSize != null){
+          if (bufferSize != null) {
             scanBuffer.removeAll { it.first < timestamp - bufferSize!! }
           }
+        } else if (!immediateEmit) {
+          // Legacy behavior: if frequency is null and immediateEmit is false, emit immediately
+          val resultMap = mapOf(
+            "device" to result.device.address,
+            "name" to deviceName,
+            "rssi" to result.rssi,
+            "timestamp" to dateTime
+          )
+          eventSink?.success(listOf(resultMap))
         }
       }
     }

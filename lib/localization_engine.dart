@@ -37,7 +37,7 @@ class LocalizationEngine {
 
   static Future<void> _setVenue({required String venueName})async{
     _localization = InitialLocalization(venueName);
-    await _localization?.parseBeaconMap(venueName);
+    _localization?.parseBeaconMap(venueName);
   }
 
   /// Initialize scanning with custom params
@@ -45,11 +45,13 @@ class LocalizationEngine {
     required Duration? frequency,
     required Duration? bufferSize,
     required Duration? timeout, // null means no timeout
+    required bool immediateEmit,
   }) async {
     final params = {
       'frequency': frequency?.inMilliseconds,
       'bufferSize': bufferSize?.inMilliseconds,
       'timeout': timeout?.inMilliseconds,
+      'immediateEmit': immediateEmit
     };
     await _methodChannel.invokeMethod('initializeScan', params);
   }
@@ -61,6 +63,7 @@ class LocalizationEngine {
      Duration? frequency,
      Duration? bufferSize,
      Duration? timeout, // null means no timeout
+     bool immediateEmit = false, // null means no timeout
      required String venueName
   }) async {
     if (_isScanning) {
@@ -70,7 +73,7 @@ class LocalizationEngine {
     print("adapterState $adapterState");
     if(adapterState['success']){
       await _setVenue(venueName: venueName);
-      _initializeScanning(frequency: frequency, bufferSize: bufferSize, timeout: timeout);
+      _initializeScanning(frequency: frequency, bufferSize: bufferSize, timeout: timeout, immediateEmit: immediateEmit);
       await _methodChannel.invokeMethod('startGpsScan');
       await _methodChannel.invokeMethod('startScan');
       _isScanning = true;
@@ -110,6 +113,22 @@ class LocalizationEngine {
           return await _localization?.findLocation(formattedData);
         } catch (e) {
           print('Error processing scan result: $e');
+          return null; // or rethrow based on your needs
+        }
+      }).handleError((error) {
+        print('Stream error: $error');
+      });
+
+  static Stream<Map<String, dynamic>?> get rawBluetoothScanResults =>
+      _bleEventChannel.receiveBroadcastStream().asyncMap((event) async {
+        try {
+          final List<dynamic> rawList = event as List;
+          for(var entry in rawList){
+            final map = Map<String, dynamic>.from(entry);
+            return map;
+          }
+        } catch (e) {
+          print('Error processing rawBluetoothScanResults scan result: $e');
           return null; // or rethrow based on your needs
         }
       }).handleError((error) {
