@@ -164,9 +164,19 @@ class _MyAppState extends State<MyApp> {
                 icon: const Icon(Icons.auto_graph),
               ),
               SizedBox(height: 12,),
-              IconButton(
-                onPressed: _startImmediateBeaconScan,
-                icon: const Icon(Icons.bluetooth_searching_sharp),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  IconButton(
+                    onPressed: _startImmediateBeaconScan,
+                    icon: const Icon(Icons.bluetooth_searching_sharp),
+                  ),
+                  SizedBox(width: 42,),
+                  IconButton(
+                    onPressed: (){locationTracker.crossedBeacon();},
+                    icon: const Icon(Icons.timer),
+                  ),
+                ],
               ),
               SizedBox(height: 12,),
               IconButton(

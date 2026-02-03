@@ -138,6 +138,11 @@ class LocationTracker {
     );
   }
 
+  List<DateTime> beaconCrossingTimes = [];
+  void crossedBeacon(){
+    beaconCrossingTimes.add(DateTime.now());
+  }
+
   Future<void> saveBleDataToCsv() async {
     if (bleDataList.isEmpty) return;
 
@@ -167,6 +172,38 @@ class LocationTracker {
     bleDataList.clear();
   }
 
+  Future<void> saveDateTimeListToCsv() async {
+    if (beaconCrossingTimes.isEmpty) return;
+
+    // CSV header (single column)
+    final headers = ['timestamp'];
+
+    // Convert DateTime list to rows
+    final rows = beaconCrossingTimes.map((dt) => [dt.toIso8601String()]).toList();
+
+    final csvData = [headers, ...rows];
+    final csvString = const ListToCsvConverter().convert(csvData);
+
+    Directory? directory;
+
+    if (Platform.isAndroid) {
+      directory = Directory('/storage/emulated/0/Download');
+    } else if (Platform.isIOS) {
+      directory = await getApplicationDocumentsDirectory();
+    }
+
+    final file = File(
+      '${directory!.path}/datetime_data_${DateTime.now().millisecondsSinceEpoch}.csv',
+    );
+
+    await file.writeAsString(csvString);
+
+    print("✅ CSV saved: ${file.path}");
+
+    beaconCrossingTimes.clear();
+  }
+
+
 
   void startGpsStream(){
     _gpsSubscription = LocalizationEngine.gpsStreamRaw.listen((data){
@@ -193,6 +230,7 @@ class LocationTracker {
     await _subscription?.cancel();
     await _allBeaconSubscription?.cancel();
     saveBleDataToCsv();
+    saveDateTimeListToCsv();
     // Cleanup resources
     await LocalizationEngine.dispose();
   }
