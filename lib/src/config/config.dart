@@ -29,9 +29,9 @@ class AppConfig {
 
   static String get apiKey {
     if (baseUrl == 'https://dev.iwayplus.in') {
-      return '63a0a740-cc23-11f0-b58c-17043284b6b2';
+      return '7cc62870-d67e-11f0-91ed-2f0eb903e7db';
     } else {
-      return '63a0a740-cc23-11f0-b58c-17043284b6b2';
+      return '98f13750-c905-11f0-b802-d78f56bdcf4f';
     }
   }
   static String appID = "com.iwayplus.rni";
