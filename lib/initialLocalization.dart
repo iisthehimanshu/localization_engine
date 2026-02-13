@@ -22,6 +22,7 @@ class InitialLocalization{
 
   Pt bestBeacon(String beaconName){
     Beacon? beacon = _apibeaconmap![beaconName];
+    print("beacon:${beacon}");
     return Pt(beacon: beacon!,x: beacon.coordinateX!.toDouble(),y: beacon.coordinateY!.toDouble());
   }
 
