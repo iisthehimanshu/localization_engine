@@ -3,9 +3,16 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 class AppConfig {
+
+  static String? url;
+
   static String get baseUrl {
+    if(url != null){
+      return url!;
+    }
+
     if (kDebugMode) {
-      return 'https://maps.iwayplus.in';
+      return 'https://dev.iwayplus.in';
     } else {
       return 'https://maps.iwayplus.in';
     }
@@ -15,7 +22,8 @@ class AppConfig {
     if (baseUrl == 'https://dev.iwayplus.in') {
       return 'rtyHuAxNZPIyx1YMCXQJcx6dX1ev0/svf79IWd1teX0=';
     } else {
-      return 'YuXmrhpu5ENd+erlQ6TXmijrtYO72Icpm6irw7f/a9E=';
+      //this api key is for udit soni
+      return 'TtcuUZ1JK26FJ7rxqp36OCQflajb1RYIIiv481l764k=';
     }
   }
 
@@ -29,11 +37,13 @@ class AppConfig {
 
   static String get apiKey {
     if (baseUrl == 'https://dev.iwayplus.in') {
-      return '63a0a740-cc23-11f0-b58c-17043284b6b2';
+      return '7cc62870-d67e-11f0-91ed-2f0eb903e7db';
     } else {
+      //this api key is for udit soni
       return '63a0a740-cc23-11f0-b58c-17043284b6b2';
     }
   }
+
   static String appID = "com.iwayplus.rni";
 
 }

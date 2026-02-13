@@ -11,6 +11,8 @@ class InitialLocalization{
   final String _venueName;
   HashMap<String, Beacon> _apibeaconmap = HashMap();
 
+  HashMap<String, Beacon> get apibeaconmap => _apibeaconmap;
+
   InitialLocalization(this._venueName);
 
   Future<Pt?> findLocation(Map<String, List<MapEntry<DateTime, int>>> beaconData) async {

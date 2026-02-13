@@ -36,11 +36,13 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
   private var frequency: Long? = null
   private var bufferSize: Long? = null
   private var timeout: Long? = null
-  private var immediateEmit: Boolean = false  // NEW: Option to emit immediately
+  private var immediateEmit: Boolean = false  // Option to emit immediately
+  private val restartInterval: Long = 60000L  // Restart scan every 60 seconds (1 minute)
 
   private var scanBuffer = mutableListOf<Pair<Long, ScanResult>>()
   private var scanTimerRunnable: Runnable? = null
   private var timeoutRunnable: Runnable? = null
+  private var restartTimerRunnable: Runnable? = null
   private var eventSink: EventChannel.EventSink? = null
 
   // GPS related
@@ -67,7 +69,7 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         frequency = call.argument<Int>("frequency")?.toLong() ?: null
         bufferSize = call.argument<Int>("bufferSize")?.toLong() ?: 5000L
         timeout = call.argument<Int?>("timeout")?.toLong()
-        immediateEmit = call.argument<Boolean>("immediateEmit") ?: false  // NEW: Get immediateEmit parameter
+        immediateEmit = call.argument<Boolean>("immediateEmit") ?: false
         result.success(null)
       }
       "startScan" -> {
@@ -96,6 +98,11 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
   private fun startScanning() {
     isScanning = true
     scanBuffer.clear()
+    startBleScan()
+    schedulePeriodicRestart()
+  }
+
+  private fun startBleScan() {
     val bluetoothLeScanner = bluetoothAdapter?.bluetoothLeScanner
 
     scanCallback = object : ScanCallback() {
@@ -111,7 +118,7 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         val timestamp = System.currentTimeMillis()
         val dateTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.getDefault()).format(java.util.Date(System.currentTimeMillis()))
 
-        // NEW: Emit immediately if immediateEmit is true
+        // Emit immediately if immediateEmit is true
         if (immediateEmit) {
           val resultMap = mapOf(
             "device" to result.device.address,
@@ -151,6 +158,7 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
       .build()
 
     bluetoothLeScanner?.startScan(null, scanSettings, scanCallback)
+    Log.d("BLE", "BLE scan started")
 
     // Only set up timer if frequency is not null
     if (frequency != null) {
@@ -191,14 +199,48 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     }
   }
 
+  private fun schedulePeriodicRestart() {
+    restartTimerRunnable = object : Runnable {
+      override fun run() {
+        if (!isScanning) return  // Don't restart if scanning was stopped
+
+        Log.d("BLE", "Restarting BLE scan (periodic 1-minute restart)")
+
+        // Stop the current scan
+        val bluetoothLeScanner = bluetoothAdapter?.bluetoothLeScanner
+        scanCallback?.let { bluetoothLeScanner?.stopScan(it) }
+
+        // Remove the periodic emission callback temporarily
+        scanTimerRunnable?.let { mainHandler.removeCallbacks(it) }
+
+        // Small delay before restarting to ensure clean stop
+        mainHandler.postDelayed({
+          if (isScanning) {
+            startBleScan()
+          }
+        }, 100)
+
+        // Schedule next restart
+        if (isScanning) {
+          mainHandler.postDelayed(this, restartInterval)
+        }
+      }
+    }
+
+    // Start the periodic restart timer
+    mainHandler.postDelayed(restartTimerRunnable!!, restartInterval)
+    Log.d("BLE", "Scheduled periodic BLE scan restart every ${restartInterval}ms")
+  }
+
   private fun stopScanning() {
     if (!isScanning) return  // Already stopped
 
     isScanning = false
 
-    // Remove callbacks FIRST
+    // Remove all callbacks FIRST
     scanTimerRunnable?.let { mainHandler.removeCallbacks(it) }
     timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+    restartTimerRunnable?.let { mainHandler.removeCallbacks(it) }
 
     // Stop the BLE scan
     val bluetoothLeScanner = bluetoothAdapter?.bluetoothLeScanner
@@ -213,6 +255,7 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     // Clear references
     scanTimerRunnable = null
     timeoutRunnable = null
+    restartTimerRunnable = null
 
     Log.d("stopScanning", "Scanning stopped completely")
   }

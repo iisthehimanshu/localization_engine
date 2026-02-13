@@ -228,24 +228,38 @@ class LocalizationEngine {
         formattedData = _localization!.filterBeacons(formattedData);
       }
 
-      String? bestBeacon;
-      double bestAvg = double.infinity;
+      Map<int, MapEntry<String, double>> bestBeaconPerFloor = {};
 
       formattedData.forEach((beaconId, entries) {
         if (entries.isEmpty) return;
 
-        var avg = entries
+        int? beaconFloor = _localization?.apibeaconmap[beaconId]?.floor;
+        if (beaconFloor == null) return;
+
+        // Calculate average RSSI
+        double avgRssi = entries
             .map((e) => e.value)
             .reduce((a, b) => a + b) /
             entries.length;
 
-        avg = avg.abs();
+        if (avgRssi < -90) return;
 
-        if (avg < bestAvg) {
-          bestAvg = avg;
-          bestBeacon = beaconId;
+        // Stronger = higher (closer to 0)
+        if (!bestBeaconPerFloor.containsKey(beaconFloor) ||
+            avgRssi > bestBeaconPerFloor[beaconFloor]!.value) {
+          bestBeaconPerFloor[beaconFloor] =
+              MapEntry(beaconId, avgRssi);
         }
       });
+
+      int lowestFloor = bestBeaconPerFloor.keys.reduce((a, b) => a < b ? a : b);
+
+      MapEntry<String, double> lowestFloorBeacon =
+      bestBeaconPerFloor[lowestFloor]!;
+
+      String bestBeacon = lowestFloorBeacon.key;
+      double bestAvg = lowestFloorBeacon.value;
+
 
       log("nearestBeacon:${bestBeacon} ${bestAvg}");
 
