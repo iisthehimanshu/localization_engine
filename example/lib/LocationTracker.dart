@@ -213,7 +213,7 @@ class LocationTracker {
     LocalizationEngine.startScanning(venueName: venueName);
   }
 
-  Future<Pt?> getCurrentLocation() async {
+  Future<Map<String, dynamic>?> getCurrentLocation() async {
     try{
       return await LocalizationEngine.getCurrentLocation(venueName: venueName);
     }catch (e){

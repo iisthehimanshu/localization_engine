@@ -113,7 +113,7 @@ class _MyAppState extends State<MyApp> {
   }
 
 
-  Future<Pt?> _getCurrentLocation() async {
+  Future<Map<String, dynamic>?> _getCurrentLocation() async {
     await _requestBluetoothPermission();
     if (await Permission.bluetoothScan.isGranted &&
         await Permission.bluetoothConnect.isGranted &&

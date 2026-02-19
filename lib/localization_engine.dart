@@ -3,7 +3,9 @@ import 'dart:developer';
 
 import 'package:adapter_manager/adapter_manager.dart';
 import 'package:flutter/services.dart';
+import 'package:localization_engine/location.dart';
 import 'package:localization_engine/src/GPS/GPSBuffer.dart';
+import 'package:localization_engine/src/localizationAlgorithm/_triangulationlLocalisation.dart';
 import 'package:localization_engine/src/network/api/localizationUsingMLModelapi.dart';
 
 import 'LocalizationException.dart';
@@ -178,7 +180,7 @@ class LocalizationEngine {
         print('gpsStreamRaw error: $error');
       });
 
-  static Future<Pt?> getCurrentLocation({required String venueName}) async {
+  static Future<Map<String, dynamic>?> getCurrentLocation({required String venueName}) async {
     try {
       await startScanning(
         frequency: const Duration(seconds: 5),
@@ -206,7 +208,7 @@ class LocalizationEngine {
           .where((event) => event is List && event.isNotEmpty)
           .first;
 
-      log("getCurrentLocation event $event");
+      // log("getCurrentLocation event $event");
 
       final List<dynamic> rawList = event as List;
       Map<String, List<MapEntry<DateTime, int>>> formattedData = {};
@@ -229,7 +231,8 @@ class LocalizationEngine {
       }
 
       String? bestBeacon;
-      double bestAvg = double.infinity;
+      double bestAvg = 90;
+      BeaconPointLocation? beaconLocation;
 
       formattedData.forEach((beaconId, entries) {
         if (entries.isEmpty) return;
@@ -248,30 +251,72 @@ class LocalizationEngine {
       });
 
       log("nearestBeacon:${bestBeacon} ${bestAvg}");
+      if(bestBeacon != null && false){
+        var beacon = _localization?.getBeaconDetails(bestBeacon!);
+        if(beacon != null){
+          beaconLocation = BeaconPointLocation(x: beacon.coordinateX!, y: beacon.coordinateY!, bid: beacon.buildingID!, floor: beacon.floor!, latitude: double.parse(beacon.properties!.latitude!), longitude: double.parse(beacon.properties!.longitude!), beacons: [bestBeacon!]);
+        }
+      }else{
+        // Calculate avg RSSI per beacon
+        final List<MapEntry<String, double>> avgList = [];
 
-      Pt? gps;
-      Pt? beacon;
+        formattedData.forEach((beaconId, entries) {
+          if (entries.isEmpty) return;
 
-      List<double>? gpsLocation = gpsBuffer.getRobustPosition();
-      print("gpsLocation $gpsLocation");
-      if(gpsLocation != null && gpsLocation.isNotEmpty){
-        gps = Pt(latitude: gpsLocation[0], longitude: gpsLocation[1]);
+          final avg = entries
+              .map((e) => e.value)
+              .reduce((a, b) => a + b) /
+              entries.length;
+
+          avgList.add(MapEntry(beaconId, avg));
+        });
+
+        // Sort by nearest (lowest avg RSSI)
+        avgList.sort((a, b) => a.value.compareTo(b.value));
+
+        // Take top 3
+        final top3 = avgList.take(3).toList();
+        log("Top 3 beacons: $top3");
+        var topBeacon = _localization?.getBeaconDetails(top3.first.key);
+
+        var list = top3.map((b)
+        {
+          var beaconDetails = _localization?.getBeaconDetails(b.key);
+          return Beacon(id: b.key, location: Point2D(beaconDetails!.coordinateX!.toDouble(), beaconDetails.coordinateY!.toDouble()), rssi: b.value);
+        }).toList();
+
+        list.forEach((item){
+          print("beacon ${item.toString()}");
+        });
+
+        TriangulationResult triangulationResult = triangulate(list);
+        print(" triangulationResult.estimatedPosition.x ${ triangulationResult.estimatedPosition.x}");
+        beaconLocation = BeaconPointLocation(x: triangulationResult.estimatedPosition.x.toInt(), y: triangulationResult.estimatedPosition.y.toInt(), bid: topBeacon!.buildingID!, floor: topBeacon.floor!, latitude: double.parse(topBeacon.properties!.latitude!), longitude: double.parse(topBeacon.properties!.longitude!), beacons: top3.map((b)=>b.key).toList());
       }
 
-      if(bestAvg < 90){
-        beacon = await _localization?.bestBeacon(bestBeacon!);
+      GPSLocation? gpsLocation;
+      List<double>? gpsBufferLocation = gpsBuffer.getRobustPosition();
+      print("gpsLocation $gpsBufferLocation");
+      if(gpsBufferLocation != null && gpsBufferLocation.isNotEmpty){
+        gpsLocation = GPSLocation(latitude: gpsBufferLocation[0], longitude: gpsBufferLocation[1]);
       }
 
-      return Pt(beacon: beacon?.beacon, x: beacon?.x, y: beacon?.y, latitude: gps?.latitude, longitude: gps?.longitude);
+      LocalizationEngineLocation location = LocalizationEngineLocation(beaconLocation: beaconLocation, gpsLocation: gpsLocation);
+
+      return location.toJson();
+
     }on StateError{
       await stopScanning();
-      List<double>? gpsLocation = gpsBuffer.getRobustPosition();
-      print("gpsLocation $gpsLocation");
-      if(gpsLocation != null && gpsLocation.isNotEmpty){
-        return Pt(latitude: gpsLocation[0], longitude: gpsLocation[1]);
-      }else{
-        return null;
+      GPSLocation? gpsLocation;
+      List<double>? gpsBufferLocation = gpsBuffer.getRobustPosition();
+      print("gpsLocation $gpsBufferLocation");
+      if(gpsBufferLocation != null && gpsBufferLocation.isNotEmpty){
+        gpsLocation = GPSLocation(latitude: gpsBufferLocation[0], longitude: gpsBufferLocation[1]);
       }
+
+      LocalizationEngineLocation location = LocalizationEngineLocation(beaconLocation: null, gpsLocation: gpsLocation);
+      return location.toJson();
+
     }on AdapterException{
       rethrow;
     }on PermissionException{
