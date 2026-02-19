@@ -1,33 +1,38 @@
 import 'dart:math';
 
-// ════════════════════════════════════════════════════════════════════════════
-// WHY POSITIONS CAN GO NEGATIVE / WILDLY WRONG
-// ════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+// HOW THE SOLVER WORKS
+// ═══════════════════════════════════════════════════════════════════════════
 //
-// rssiToDistance() always returns metres (SI units).
-// Your x/y beacon coordinates may be in a DIFFERENT unit — pixels, cm, tiles…
+//  Each beacon defines a circle: centre = beacon position, radius = RSSI→distance.
+//  The device is at the intersection of those circles.
 //
-// If the two unit systems don't match, the circle radii (from RSSI) will be
-// far smaller than the actual beacon separations (from x/y), so the circles
-// never intersect inside the beacon triangle.  The solver then extrapolates
-// to a point far outside — often negative — to minimise residuals.
+//  Real-world RSSI is noisy, so three cases arise:
 //
-// Fix: pass `distanceScale` = (local units per metre).
-//   e.g. if your floor-plan has 1 pixel = 0.1 m  →  distanceScale = 10.0
-//        if your floor-plan has 1 pixel = 0.4 m  →  distanceScale = 2.5
+//  ┌─────────────────────────────────────────────────────────────────────┐
+//  │ Case 1 – Circles too SMALL (non-intersecting)                       │
+//  │   Inflate all radii by the same factor (binary search) until every  │
+//  │   pair of circles just overlaps, then trilaterate.                  │
+//  │   This is the "circle inflation" strategy the user requested.       │
+//  ├─────────────────────────────────────────────────────────────────────┤
+//  │ Case 2 – Circles too LARGE (overlap outside the beacon triangle)    │
+//  │   Closed-form trilateration gives a point far outside / negative.   │
+//  │   Fall back to gradient-descent least-squares, which always finds   │
+//  │   the finite point that minimises Σ(dist - radius)².                │
+//  ├─────────────────────────────────────────────────────────────────────┤
+//  │ Case 3 – Circles intersect nicely inside the triangle (ideal)       │
+//  │   Closed-form trilateration gives an exact answer directly.         │
+//  └─────────────────────────────────────────────────────────────────────┘
 //
-// Alternatively, adjust `txPower` so that a beacon at 1 m would read the
-// RSSI you observe at 1 local-unit of distance.
-//
-// Quick self-check: after calling triangulate() inspect the returned
-// `distances` list.  Each value (already in local units) should be smaller
-// than the corresponding beacon-to-beacon separations in your coordinate
-// system.  If not, increase distanceScale.
-// ════════════════════════════════════════════════════════════════════════════
+//  UNIT MISMATCH WARNING
+//  rssiToDistance() returns metres by default.
+//  If your x/y coordinates are in feet, pass distanceScale = 3.28084.
+//  If they are pixels where 1 px = 0.5 m, pass distanceScale = 2.0, etc.
+// ═══════════════════════════════════════════════════════════════════════════
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────
 // Data types
-// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────
 
 class Point2D {
   final double x;
@@ -207,16 +212,24 @@ double? _inflationScale(
 // ─────────────────────────────────────────────────────────────────────────
 
 /// Finds the point P that minimises  Σᵢ (‖P − cᵢ‖ − rᵢ)²
-/// via gradient descent with a decaying learning rate.
+/// via gradient descent with an adaptive step size and gradient clipping.
 ///
-/// This always converges to a finite answer regardless of whether the
-/// circles intersect inside or outside the beacon polygon.
+/// ### Why these two fixes prevent NaN
+/// **Adaptive base LR** (`min(radii) * 0.1`): a fixed LR of 2.0 is way too
+/// large when radii are small (e.g. 9 ft).  The raw gradient magnitude grows
+/// inversely with radius, so the position explodes to ±Inf in a few steps.
+/// Tying the LR to the smallest radius keeps the update proportionate to the
+/// problem scale regardless of what unit system or txPower you use.
+///
+/// **Gradient clipping** (normalise to unit vector): caps the step to exactly
+/// `baseLr` on the first few chaotic iterations before convergence.  Once the
+/// gradient is naturally small the clip has no effect.
 Point2D _leastSquares(
     List<Point2D> centres,
     List<double> radii, {
-      int iterations = 4000,
+      int iterations = 2000,
     }) {
-  // Initialise at inverse-distance weighted centroid
+  // Initialise at inverse-distance weighted centroid (closer beacon = more weight)
   final weights = radii.map((r) => 1.0 / (r + 1e-9)).toList();
   final totalW = weights.fold(0.0, (s, w) => s + w);
   double px = 0, py = 0;
@@ -227,6 +240,9 @@ Point2D _leastSquares(
   px /= totalW;
   py /= totalW;
 
+  // Scale step size to the geometry — safe for any unit (feet, metres, pixels…)
+  final baseLr = radii.reduce(min) * 0.1;
+
   for (int iter = 0; iter < iterations; iter++) {
     double gx = 0, gy = 0;
     for (int i = 0; i < centres.length; i++) {
@@ -234,12 +250,21 @@ Point2D _leastSquares(
       final dy = py - centres[i].y;
       final dist = sqrt(dx * dx + dy * dy);
       if (dist < 1e-9) continue;
-      final err = dist - radii[i]; // signed: + means too far, - too close
+      final err = dist - radii[i]; // + = too far from beacon, − = too close
       gx += err * dx / dist;
       gy += err * dy / dist;
     }
-    // Decaying learning rate: starts fast, slows for fine convergence
-    final lr = 2.0 / (1.0 + iter * 0.003);
+
+    // Gradient clipping: if the raw gradient is large, normalise to unit
+    // length so each step is at most baseLr — prevents exploding updates.
+    final gMag = sqrt(gx * gx + gy * gy);
+    if (gMag > 1.0) {
+      gx /= gMag;
+      gy /= gMag;
+    }
+
+    // Decaying LR: big steps early for speed, tiny steps later for precision
+    final lr = baseLr / (1.0 + iter * 0.001);
     px -= lr * gx;
     py -= lr * gy;
   }
@@ -508,7 +533,6 @@ TriangulationResult triangulate(
       );
   }
 }
-
 
 void main() {
   print('══════════════════════════════════════════════════════════════');

@@ -251,48 +251,49 @@ class LocalizationEngine {
       });
 
       log("nearestBeacon:${bestBeacon} ${bestAvg}");
-      if(bestBeacon != null && false){
+      if(bestBeacon != null){
         var beacon = _localization?.getBeaconDetails(bestBeacon!);
         if(beacon != null){
           beaconLocation = BeaconPointLocation(x: beacon.coordinateX!, y: beacon.coordinateY!, bid: beacon.buildingID!, floor: beacon.floor!, latitude: double.parse(beacon.properties!.latitude!), longitude: double.parse(beacon.properties!.longitude!), beacons: [bestBeacon!]);
         }
-      }else{
-        // Calculate avg RSSI per beacon
-        final List<MapEntry<String, double>> avgList = [];
-
-        formattedData.forEach((beaconId, entries) {
-          if (entries.isEmpty) return;
-
-          final avg = entries
-              .map((e) => e.value)
-              .reduce((a, b) => a + b) /
-              entries.length;
-
-          avgList.add(MapEntry(beaconId, avg));
-        });
-
-        // Sort by nearest (lowest avg RSSI)
-        avgList.sort((a, b) => a.value.compareTo(b.value));
-
-        // Take top 3
-        final top3 = avgList.take(3).toList();
-        log("Top 3 beacons: $top3");
-        var topBeacon = _localization?.getBeaconDetails(top3.first.key);
-
-        var list = top3.map((b)
-        {
-          var beaconDetails = _localization?.getBeaconDetails(b.key);
-          return Beacon(id: b.key, location: Point2D(beaconDetails!.coordinateX!.toDouble(), beaconDetails.coordinateY!.toDouble()), rssi: b.value);
-        }).toList();
-
-        list.forEach((item){
-          print("beacon ${item.toString()}");
-        });
-
-        TriangulationResult triangulationResult = triangulate(list);
-        print(" triangulationResult.estimatedPosition.x ${ triangulationResult.estimatedPosition.x}");
-        beaconLocation = BeaconPointLocation(x: triangulationResult.estimatedPosition.x.toInt(), y: triangulationResult.estimatedPosition.y.toInt(), bid: topBeacon!.buildingID!, floor: topBeacon.floor!, latitude: double.parse(topBeacon.properties!.latitude!), longitude: double.parse(topBeacon.properties!.longitude!), beacons: top3.map((b)=>b.key).toList());
       }
+      // else{
+      //   // Calculate avg RSSI per beacon
+      //   final List<MapEntry<String, double>> avgList = [];
+      //
+      //   formattedData.forEach((beaconId, entries) {
+      //     if (entries.isEmpty) return;
+      //
+      //     final avg = entries
+      //         .map((e) => e.value)
+      //         .reduce((a, b) => a + b) /
+      //         entries.length;
+      //
+      //     avgList.add(MapEntry(beaconId, avg));
+      //   });
+      //
+      //   // Sort by nearest (lowest avg RSSI)
+      //   avgList.sort((a, b) => a.value.compareTo(b.value));
+      //
+      //   // Take top 3
+      //   final top3 = avgList.take(3).toList();
+      //   log("Top 3 beacons: $top3");
+      //   var topBeacon = _localization?.getBeaconDetails(top3.first.key);
+      //
+      //   var list = top3.map((b)
+      //   {
+      //     var beaconDetails = _localization?.getBeaconDetails(b.key);
+      //     return Beacon(id: b.key, location: Point2D(beaconDetails!.coordinateX!.toDouble(), beaconDetails.coordinateY!.toDouble()), rssi: b.value);
+      //   }).toList();
+      //
+      //   list.forEach((item){
+      //     print("beacon ${item.toString()}");
+      //   });
+      //
+      //   TriangulationResult triangulationResult = triangulate(list);
+      //   print(" triangulationResult.estimatedPosition.x ${ triangulationResult.estimatedPosition.x}");
+      //   beaconLocation = BeaconPointLocation(x: triangulationResult.estimatedPosition.x.toInt(), y: triangulationResult.estimatedPosition.y.toInt(), bid: topBeacon!.buildingID!, floor: topBeacon.floor!, latitude: double.parse(topBeacon.properties!.latitude!), longitude: double.parse(topBeacon.properties!.longitude!), beacons: top3.map((b)=>b.key).toList());
+      // }
 
       GPSLocation? gpsLocation;
       List<double>? gpsBufferLocation = gpsBuffer.getRobustPosition();
