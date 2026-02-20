@@ -21,13 +21,17 @@ public class LocalizationEnginePlugin: NSObject,
     private var centralManager: CBCentralManager!
     private var isScanning = false
 
-    private var frequency: Int = 1000     // in ms
-    private var bufferSize: Int = 5000    // in ms
+    private var frequency: Int? = nil       // in ms (nil means no periodic emission)
+    private var bufferSize: Int = 5000      // in ms
     private var timeout: Int? = nil
+    private var immediateEmit: Bool = false // NEW: emit immediately on discovery
+
+    private let restartInterval: TimeInterval = 60.0 // NEW: restart every 60 seconds
 
     private var scanBuffer: [(timestamp: TimeInterval, rssi: Int, peripheral: CBPeripheral, name: String)] = []
     private var scanTimer: Timer?
     private var timeoutTimer: Timer?
+    private var restartTimer: Timer?       // NEW: periodic restart timer
 
     // GPS Related
     private var locationManager: CLLocationManager?
@@ -35,28 +39,24 @@ public class LocalizationEnginePlugin: NSObject,
     public static func register(with registrar: FlutterPluginRegistrar) {
         let instance = LocalizationEnginePlugin()
 
-        // Method Channel
         instance.methodChannel = FlutterMethodChannel(
             name: "localization_engine",
             binaryMessenger: registrar.messenger()
         )
         registrar.addMethodCallDelegate(instance, channel: instance.methodChannel!)
 
-        // BLE Event Channel
         instance.eventChannel = FlutterEventChannel(
             name: "ble_scan_stream",
             binaryMessenger: registrar.messenger()
         )
         instance.eventChannel?.setStreamHandler(instance)
 
-        // GPS Event Channel
         instance.gpsEventChannel = FlutterEventChannel(
             name: "gps_scan_stream",
             binaryMessenger: registrar.messenger()
         )
         instance.gpsEventChannel?.setStreamHandler(GpsStreamHandler(plugin: instance))
 
-        // Initialize managers
         instance.centralManager = CBCentralManager(delegate: instance, queue: nil)
         instance.locationManager = CLLocationManager()
         instance.locationManager?.delegate = instance
@@ -69,9 +69,16 @@ public class LocalizationEnginePlugin: NSObject,
 
         case "initializeScan":
             let args = call.arguments as? [String: Any]
-            frequency = args?["frequency"] as? Int ?? 1000
+            // CHANGED: frequency is now optional (nil if not provided), matching Android behavior
+            if let freq = args?["frequency"] as? Int {
+                frequency = freq
+            } else {
+                frequency = nil
+            }
             bufferSize = args?["bufferSize"] as? Int ?? 5000
             timeout = args?["timeout"] as? Int
+            // NEW: read immediateEmit parameter
+            immediateEmit = args?["immediateEmit"] as? Bool ?? false
             result(nil)
 
         case "startScan":
@@ -103,27 +110,64 @@ public class LocalizationEnginePlugin: NSObject,
         isScanning = true
         scanBuffer.removeAll()
 
+        startBleScan()
+        schedulePeriodicRestart() // NEW: schedule 60s restart
+    }
+
+    // NEW: extracted startBleScan so it can be called on restart too
+    private func startBleScan() {
         if centralManager.state == .poweredOn {
-            centralManager.scanForPeripherals(withServices: nil, options: nil)
+            centralManager.scanForPeripherals(withServices: nil, options: [
+                CBCentralManagerScanOptionAllowDuplicatesKey: true // Match Android MATCH_NUM_MAX_ADVERTISEMENT
+            ])
             print("BLE: Started scanning")
         } else {
             print("BLE: Bluetooth not powered on")
         }
 
-        // Start timer to push results at specified frequency
-        scanTimer = Timer.scheduledTimer(timeInterval: Double(frequency)/1000.0,
-                                         target: self,
-                                         selector: #selector(pushScanResults),
-                                         userInfo: nil,
-                                         repeats: true)
+        // Only set up periodic emission timer if frequency is set
+        if let frequency = frequency {
+            scanTimer = Timer.scheduledTimer(timeInterval: Double(frequency) / 1000.0,
+                                             target: self,
+                                             selector: #selector(pushScanResults),
+                                             userInfo: nil,
+                                             repeats: true)
+        }
 
-        // Set timeout if specified
         if let timeout = timeout {
-            timeoutTimer = Timer.scheduledTimer(withTimeInterval: Double(timeout)/1000.0,
+            timeoutTimer = Timer.scheduledTimer(withTimeInterval: Double(timeout) / 1000.0,
                                                 repeats: false) { [weak self] _ in
                 self?.stopScanning()
             }
         }
+    }
+
+    // NEW: periodic restart every 60 seconds, mirrors Android schedulePeriodicRestart()
+    private func schedulePeriodicRestart() {
+        restartTimer = Timer.scheduledTimer(timeInterval: restartInterval,
+                                            target: self,
+                                            selector: #selector(handlePeriodicRestart),
+                                            userInfo: nil,
+                                            repeats: true)
+        print("BLE: Scheduled periodic BLE scan restart every \(restartInterval)s")
+    }
+
+    @objc private func handlePeriodicRestart() {
+        guard isScanning else { return }
+
+        print("BLE: Restarting BLE scan (periodic 60s restart)")
+
+        // Stop current scan and timer
+        centralManager.stopScan()
+        scanTimer?.invalidate()
+        scanTimer = nil
+
+        // Small delay before restarting
+       DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+               guard let strongSelf = self else { return }
+               guard strongSelf.isScanning else { return }
+               strongSelf.startBleScan()
+           }
     }
 
     private func stopScanning() {
@@ -131,19 +175,16 @@ public class LocalizationEnginePlugin: NSObject,
 
         isScanning = false
 
-        // Invalidate timers first
+        // Invalidate all timers first
         scanTimer?.invalidate()
         scanTimer = nil
         timeoutTimer?.invalidate()
         timeoutTimer = nil
+        restartTimer?.invalidate()   // NEW: cancel restart timer
+        restartTimer = nil
 
-        // Stop BLE scan
         centralManager.stopScan()
-
-        // Clear buffer
         scanBuffer.removeAll()
-
-        // End stream
         eventSink?(FlutterEndOfEventStream)
 
         print("BLE: Scanning stopped completely")
@@ -157,6 +198,11 @@ public class LocalizationEnginePlugin: NSObject,
             print("BLE: Bluetooth is powered on")
         case .poweredOff:
             print("BLE: Bluetooth is powered off")
+            // NEW: stop scanning if bluetooth turns off mid-scan, mirrors Android bluetooth-off check
+            if isScanning {
+                print("BLE: Bluetooth turned off during scan - stopping")
+                stopScanning()
+            }
         case .unauthorized:
             print("BLE: Bluetooth is unauthorized")
         case .unsupported:
@@ -174,23 +220,62 @@ public class LocalizationEnginePlugin: NSObject,
         guard isScanning else { return }
 
         let name = peripheral.name ?? (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? ""
-
-        // Filter: Only include devices with names starting with "IW"
         guard name.lowercased().hasPrefix("iw") else { return }
 
-        let timestamp = Date().timeIntervalSince1970 * 1000
+        let timestamp = Date().timeIntervalSince1970 * 1000 // ms
 
-        scanBuffer.append((timestamp, RSSI.intValue, peripheral, name))
+        // NEW: immediateEmit - emit right away on discovery with formatted date string
+        if immediateEmit {
+            let dateTime = formattedDateTime(from: timestamp)
+            let resultMap: [String: Any] = [
+                "device": peripheral.identifier.uuidString,
+                "name": name,
+                "rssi": RSSI.intValue,
+                "timestamp": dateTime
+            ]
+            eventSink?([resultMap])
+        }
 
-        // Remove entries older than bufferSize
-        let minTimestamp = timestamp - Double(bufferSize)
-        scanBuffer.removeAll { $0.timestamp < minTimestamp }
+        // Buffer if frequency is set
+        if frequency != nil {
+            scanBuffer.append((timestamp, RSSI.intValue, peripheral, name))
+            let minTimestamp = timestamp - Double(bufferSize)
+            scanBuffer.removeAll { $0.timestamp < minTimestamp }
+        } else if !immediateEmit {
+            // NEW: legacy behavior - if no frequency and no immediateEmit, emit immediately
+            let dateTime = formattedDateTime(from: timestamp)
+            let resultMap: [String: Any] = [
+                "device": peripheral.identifier.uuidString,
+                "name": name,
+                "rssi": RSSI.intValue,
+                "timestamp": dateTime
+            ]
+            eventSink?([resultMap])
+        }
+    }
+
+    // NEW: helper to format timestamp as "yyyy-MM-dd HH:mm:ss.SSS", matching Android
+    private func formattedDateTime(from milliseconds: TimeInterval) -> String {
+        let date = Date(timeIntervalSince1970: milliseconds / 1000.0)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        formatter.locale = Locale.current
+        return formatter.string(from: date)
     }
 
     // MARK: - Push Buffer to Flutter
 
     @objc private func pushScanResults() {
-        guard let sink = eventSink, isScanning else { return }
+        guard isScanning else { return }
+
+        // NEW: check if Bluetooth is still on before emitting, mirrors Android bluetooth-off check
+        guard centralManager.state == .poweredOn else {
+            print("BLE: Bluetooth is OFF during periodic push - stopping scan")
+            stopScanning()
+            return
+        }
+
+        guard let sink = eventSink else { return }
 
         let mapped = scanBuffer.map {
             [
@@ -198,21 +283,19 @@ public class LocalizationEnginePlugin: NSObject,
                 "name": $0.name,
                 "rssi": $0.rssi,
                 "timestamp": Int($0.timestamp)
-            ] as [String : Any]
+            ] as [String: Any]
         }
 
         print("BLE: Pushing \(mapped.count) results to stream")
         sink(mapped)
     }
 
-    // MARK: - GPS Location Methods
+    // MARK: - GPS Location Methods (unchanged)
 
     private func startLocationUpdates() {
         guard let locationManager = locationManager else { return }
-
         print("GPS: Initializing location updates")
 
-        // Check authorization status
         let authStatus: CLAuthorizationStatus
         if #available(iOS 14.0, *) {
             authStatus = locationManager.authorizationStatus
@@ -236,10 +319,8 @@ public class LocalizationEnginePlugin: NSObject,
             break
         }
 
-        // Configure location manager
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
-        locationManager.distanceFilter = 0 // Report all movements
-
+        locationManager.distanceFilter = 0
         locationManager.startUpdatingLocation()
         print("GPS: Location updates started")
     }
@@ -248,8 +329,6 @@ public class LocalizationEnginePlugin: NSObject,
         locationManager?.stopUpdatingLocation()
         print("GPS: Location updates stopped")
     }
-
-    // MARK: - CLLocationManager Delegate
 
     public func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last else { return }
@@ -263,7 +342,6 @@ public class LocalizationEnginePlugin: NSObject,
             "speed": location.speed,
             "timestamp": Int(location.timestamp.timeIntervalSince1970 * 1000)
         ]
-
         gpsEventSink?(data)
     }
 
@@ -276,9 +354,7 @@ public class LocalizationEnginePlugin: NSObject,
 
     public func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
         print("GPS: Authorization status changed to \(status.rawValue)")
-
         if status == .authorizedWhenInUse || status == .authorizedAlways {
-            // Permission granted, start updates if requested
             if locationManager?.location != nil {
                 startLocationUpdates()
             }
@@ -303,7 +379,7 @@ public class LocalizationEnginePlugin: NSObject,
         return nil
     }
 
-    // MARK: - GPS Stream Handler (Nested Class)
+    // MARK: - GPS Stream Handler
 
     class GpsStreamHandler: NSObject, FlutterStreamHandler {
         weak var plugin: LocalizationEnginePlugin?
