@@ -14,7 +14,7 @@ class LocationTracker {
   StreamSubscription<Map<String, dynamic>?>? rawBluetoothScanResults;
   StreamSubscription<Map<String, dynamic>?>? _gpsSubscription;
 
-  String venueName = "IITDelhi";
+  String venueName = "NationalZoologicalPark";
 
   Map<String, List<MapEntry<DateTime, int>>> beaconScan = {};
 

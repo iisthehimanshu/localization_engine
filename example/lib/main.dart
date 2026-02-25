@@ -108,7 +108,7 @@ class _MyAppState extends State<MyApp> {
     await LocalizationEngine.startScanning(
       frequency: const Duration(seconds: 2),
       bufferSize: const Duration(seconds: 2),
-      venueName: 'IITDelhi',
+      venueName: 'NationalZoologicalPark',
     );
   }
 
