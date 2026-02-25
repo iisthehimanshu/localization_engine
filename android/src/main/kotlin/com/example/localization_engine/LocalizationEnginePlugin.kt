@@ -115,6 +115,17 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
         if (!deviceName.startsWith("IW", ignoreCase = true)) return
 
+        val manufacturerData = result.scanRecord?.manufacturerSpecificData
+
+        var manufacturerHex: String? = null
+
+        manufacturerData?.let { data ->
+          if (data.size() > 0) {
+            val bytes = data.valueAt(0)
+            manufacturerHex = bytes.joinToString("") { "%02X".format(it) }
+          }
+        }
+
         val timestamp = System.currentTimeMillis()
         val dateTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.getDefault()).format(java.util.Date(System.currentTimeMillis()))
 
@@ -124,7 +135,8 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             "device" to result.device.address,
             "name" to deviceName,
             "rssi" to result.rssi,
-            "timestamp" to dateTime
+            "timestamp" to dateTime,
+            "manufacturerHex" to manufacturerHex
           )
           eventSink?.success(listOf(resultMap))
         }
@@ -141,7 +153,8 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             "device" to result.device.address,
             "name" to deviceName,
             "rssi" to result.rssi,
-            "timestamp" to dateTime
+            "timestamp" to dateTime,
+            "manufacturerHex" to manufacturerHex
           )
           eventSink?.success(listOf(resultMap))
         }
@@ -175,11 +188,23 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
           }
 
           val resultsMap = scanBuffer.map {
+
+            val manufacturerData = it.second.scanRecord?.manufacturerSpecificData
+            var manufacturerHex: String? = null
+
+            manufacturerData?.let { data ->
+              if (data.size() > 0) {
+                val bytes = data.valueAt(0)
+                manufacturerHex = bytes.joinToString("") { "%02X".format(it) }
+              }
+            }
+
             mapOf(
               "device" to it.second.device.address,
               "name" to (it.second.scanRecord?.deviceName ?: it.second.device.name ?: "Unknown"),
               "rssi" to it.second.rssi,
-              "timestamp" to it.first
+              "timestamp" to it.first,
+              "manufacturerHex" to manufacturerHex
             )
           }
           eventSink?.success(resultsMap)
