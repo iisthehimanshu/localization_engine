@@ -16,6 +16,18 @@
 	<string>untitled_example</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+    <string>App requires Bluetooth access to enhance indoor navigation at Ashoka University by connecting to Bluetooth beacons for accurate positioning.</string>
+    <key>NSBluetoothPeripheralUsageDescription</key>
+    <string>App requires Bluetooth access to enhance indoor navigation at Ashoka University by connecting to Bluetooth beacons for accurate positioning.</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>We need location access to localise user to nearest building on our map</string>
+    <key>NSLocationAlwaysUsageDescription</key>
+    <string>We need location access to localise user to nearest building on our map</string>
+    <key>NSLocationUsageDescription</key>
+    <string>This app needs access to location when in the foreground.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>We need location access to localise user to nearest building on our map</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(FLUTTER_BUILD_NAME)</string>
 	<key>CFBundleSignature</key>

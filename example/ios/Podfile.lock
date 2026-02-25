@@ -1,0 +1,91 @@
+PODS:
+  - adapter_manager (0.0.1):
+    - Flutter
+  - app_settings (5.1.1):
+    - Flutter
+  - bluetooth_enable_fork (0.1.4):
+    - Flutter
+  - Flutter (1.0.0)
+  - flutter_blue_plus_darwin (0.0.2):
+    - Flutter
+    - FlutterMacOS
+  - flutter_compass (0.0.1):
+    - Flutter
+  - fluttertoast (0.0.2):
+    - Flutter
+  - geolocator_apple (1.2.0):
+    - Flutter
+    - FlutterMacOS
+  - integration_test (0.0.1):
+    - Flutter
+  - localization_engine (0.0.1):
+    - Flutter
+  - package_info_plus (0.4.5):
+    - Flutter
+  - path_provider_foundation (0.0.1):
+    - Flutter
+    - FlutterMacOS
+  - permission_handler_apple (9.3.0):
+    - Flutter
+
+DEPENDENCIES:
+  - adapter_manager (from `.symlinks/plugins/adapter_manager/ios`)
+  - app_settings (from `.symlinks/plugins/app_settings/ios`)
+  - bluetooth_enable_fork (from `.symlinks/plugins/bluetooth_enable_fork/ios`)
+  - Flutter (from `Flutter`)
+  - flutter_blue_plus_darwin (from `.symlinks/plugins/flutter_blue_plus_darwin/darwin`)
+  - flutter_compass (from `.symlinks/plugins/flutter_compass/ios`)
+  - fluttertoast (from `.symlinks/plugins/fluttertoast/ios`)
+  - geolocator_apple (from `.symlinks/plugins/geolocator_apple/darwin`)
+  - integration_test (from `.symlinks/plugins/integration_test/ios`)
+  - localization_engine (from `.symlinks/plugins/localization_engine/ios`)
+  - package_info_plus (from `.symlinks/plugins/package_info_plus/ios`)
+  - path_provider_foundation (from `.symlinks/plugins/path_provider_foundation/darwin`)
+  - permission_handler_apple (from `.symlinks/plugins/permission_handler_apple/ios`)
+
+EXTERNAL SOURCES:
+  adapter_manager:
+    :path: ".symlinks/plugins/adapter_manager/ios"
+  app_settings:
+    :path: ".symlinks/plugins/app_settings/ios"
+  bluetooth_enable_fork:
+    :path: ".symlinks/plugins/bluetooth_enable_fork/ios"
+  Flutter:
+    :path: Flutter
+  flutter_blue_plus_darwin:
+    :path: ".symlinks/plugins/flutter_blue_plus_darwin/darwin"
+  flutter_compass:
+    :path: ".symlinks/plugins/flutter_compass/ios"
+  fluttertoast:
+    :path: ".symlinks/plugins/fluttertoast/ios"
+  geolocator_apple:
+    :path: ".symlinks/plugins/geolocator_apple/darwin"
+  integration_test:
+    :path: ".symlinks/plugins/integration_test/ios"
+  localization_engine:
+    :path: ".symlinks/plugins/localization_engine/ios"
+  package_info_plus:
+    :path: ".symlinks/plugins/package_info_plus/ios"
+  path_provider_foundation:
+    :path: ".symlinks/plugins/path_provider_foundation/darwin"
+  permission_handler_apple:
+    :path: ".symlinks/plugins/permission_handler_apple/ios"
+
+SPEC CHECKSUMS:
+  adapter_manager: b0c6b6dcaba2983207f9eb9117a3ad427ad389ec
+  app_settings: 58017cd26b604ae98c3e65acbdd8ba173703cc82
+  bluetooth_enable_fork: 73b8ca6e67230a9baa04010cd5c1e824e00d2797
+  Flutter: e0871f40cf51350855a761d2e70bf5af5b9b5de7
+  flutter_blue_plus_darwin: 904ed52825285a15f60e9d90312337a09f11a785
+  flutter_compass: cbbd285cea1584c7ac9c4e0c3e1f17cbea55e855
+  fluttertoast: 21eecd6935e7064cc1fcb733a4c5a428f3f24f0f
+  geolocator_apple: 66b711889fd333205763b83c9dcf0a57a28c7afd
+  integration_test: 252f60fa39af5e17c3aa9899d35d908a0721b573
+  localization_engine: 36f45ef98db109a2c4af375ec6ce343eaef7fe63
+  package_info_plus: c0502532a26c7662a62a356cebe2692ec5fe4ec4
+  path_provider_foundation: 2b6b4c569c0fb62ec74538f866245ac84301af46
+  permission_handler_apple: 9878588469a2b0d0fc1e048d9f43605f92e6cec2
+
+PODFILE CHECKSUM: 1959d098c91d8a792531a723c4a9d7e9f6a01e38
+
+COCOAPODS: 1.16.2
