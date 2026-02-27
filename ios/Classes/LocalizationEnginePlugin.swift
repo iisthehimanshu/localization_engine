@@ -319,8 +319,11 @@ public class LocalizationEnginePlugin: NSObject,
             break
         }
 
-        locationManager.desiredAccuracy = kCLLocationAccuracyBest
-        locationManager.distanceFilter = 0
+        // AFTER (matches Android's 1000ms cadence)
+        locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation  // forces ~1s GPS chipset rate
+        locationManager.pausesLocationUpdatesAutomatically = false
+        locationManager.distanceFilter = kCLDistanceFilterNone                  // fire on any movement
+        locationManager.activityType = .otherNavigation                         // disables iOS dead-reckoning / motion coalescing
         locationManager.startUpdatingLocation()
         print("GPS: Location updates started")
     }

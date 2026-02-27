@@ -251,12 +251,15 @@ class LocationTracker {
 
 
 
-  void startGpsStream(){
+  Future<void> startGpsStream() async {
     _gpsSubscription = LocalizationEngine.gpsStreamRaw.listen((data){
       print("gpsStream $data");
     });
-    
-    LocalizationEngine.startScanning(venueName: venueName);
+
+    await LocalizationEngine.startScanning(
+      immediateEmit: true,
+      venueName: venueName, // Required
+    );
   }
 
   Future<Map<String, dynamic>?> getCurrentLocation() async {

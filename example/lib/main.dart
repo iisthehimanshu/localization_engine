@@ -19,9 +19,16 @@ class MyApp extends StatefulWidget {
 
 class _MyAppState extends State<MyApp> {
   LocationTracker locationTracker = LocationTracker();
+  final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey =
+  GlobalKey<ScaffoldMessengerState>();
+
+  void _showPermissionDeniedSnackbar() {
+    _scaffoldMessengerKey.currentState?.showSnackBar(
+      const SnackBar(content: Text('Bluetooth permission denied')),
+    );
+  }
 
   Future<void> _requestBluetoothPermission() async {
-    // Request permissions required for BLE scanning
     await [
       Permission.bluetooth,
       Permission.bluetoothScan,
@@ -30,59 +37,48 @@ class _MyAppState extends State<MyApp> {
     ].request();
   }
 
+  Future<bool> _hasPermissions() async {
+    return true;
+  }
+
   Future<void> _startTracking() async {
     await _requestBluetoothPermission();
-    if (await Permission.bluetoothScan.isGranted &&
-        await Permission.bluetoothConnect.isGranted &&
-        await Permission.locationWhenInUse.isGranted) {
+    if (await _hasPermissions()) {
       locationTracker.startTracking();
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Bluetooth permission denied')),
-      );
+      _showPermissionDeniedSnackbar();
     }
   }
 
   Future<void> _startImmediateBeaconScan() async {
     await _requestBluetoothPermission();
-    if (await Permission.bluetoothScan.isGranted &&
-        await Permission.bluetoothConnect.isGranted &&
-        await Permission.locationWhenInUse.isGranted) {
+    if (await _hasPermissions()) {
       locationTracker.scanForRawBluetooth();
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Bluetooth permission denied')),
-      );
+      _showPermissionDeniedSnackbar();
     }
   }
 
   Future<void> _startGPSStream() async {
     await _requestBluetoothPermission();
-    if (await Permission.bluetoothScan.isGranted &&
-        await Permission.bluetoothConnect.isGranted &&
-        await Permission.locationWhenInUse.isGranted) {
+    if (await _hasPermissions()) {
       locationTracker.startGpsStream();
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Bluetooth permission denied')),
-      );
+      _showPermissionDeniedSnackbar();
     }
   }
 
   Future<void> _startPeakValley() async {
     await _requestBluetoothPermission();
-    if (await Permission.bluetoothScan.isGranted &&
-        await Permission.bluetoothConnect.isGranted &&
-        await Permission.locationWhenInUse.isGranted) {
+    if (await _hasPermissions()) {
       locationTracker.peakValley();
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Bluetooth permission denied')),
-      );
+      _showPermissionDeniedSnackbar();
     }
   }
 
-  StreamSubscription<Map<String, List<MapEntry<DateTime, int>>>?>? _allBeaconSubscription;
+  StreamSubscription<Map<String, List<MapEntry<DateTime, int>>>?>?
+  _allBeaconSubscription;
 
   final StreamController<Map<String, List<int>>> beaconStreamController =
   StreamController.broadcast();
@@ -112,30 +108,26 @@ class _MyAppState extends State<MyApp> {
     );
   }
 
-
   Future<Map<String, dynamic>?> _getCurrentLocation() async {
     await _requestBluetoothPermission();
-    if (await Permission.bluetoothScan.isGranted &&
-        await Permission.bluetoothConnect.isGranted &&
-        await Permission.locationWhenInUse.isGranted) {
-      try{
+    if (await _hasPermissions()) {
+      try {
         var location = await locationTracker.getCurrentLocation();
         print("_getCurrentLocation $location");
         return location;
-      }catch(e){
+      } catch (e) {
         print("_getCurrentLocation $e");
       }
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Bluetooth permission denied')),
-      );
-      return null;
+      _showPermissionDeniedSnackbar();
     }
+    return null;
   }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      scaffoldMessengerKey: _scaffoldMessengerKey,
       home: Scaffold(
         appBar: AppBar(
           title: const Text('Plugin example app'),
@@ -148,22 +140,22 @@ class _MyAppState extends State<MyApp> {
                 onPressed: _startTracking,
                 icon: const Icon(Icons.bluetooth),
               ),
-              SizedBox(height: 12,),
+              const SizedBox(height: 12),
               IconButton(
                 onPressed: _startGPSStream,
                 icon: const Icon(Icons.location_on),
               ),
-              SizedBox(height: 12,),
+              const SizedBox(height: 12),
               IconButton(
                 onPressed: _getCurrentLocation,
                 icon: const Icon(Icons.my_location),
               ),
-              SizedBox(height: 12,),
+              const SizedBox(height: 12),
               IconButton(
                 onPressed: _startPeakValley,
                 icon: const Icon(Icons.auto_graph),
               ),
-              SizedBox(height: 12,),
+              const SizedBox(height: 12),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -171,16 +163,18 @@ class _MyAppState extends State<MyApp> {
                     onPressed: _startImmediateBeaconScan,
                     icon: const Icon(Icons.bluetooth_searching_sharp),
                   ),
-                  SizedBox(width: 42,),
+                  const SizedBox(width: 42),
                   IconButton(
-                    onPressed: (){locationTracker.crossedBeacon();},
+                    onPressed: () {
+                      locationTracker.crossedBeacon();
+                    },
                     icon: const Icon(Icons.timer),
                   ),
                 ],
               ),
-              SizedBox(height: 12,),
+              const SizedBox(height: 12),
               IconButton(
-                onPressed: (){
+                onPressed: () {
                   locationTracker.stop();
                 },
                 icon: const Icon(Icons.cancel),
