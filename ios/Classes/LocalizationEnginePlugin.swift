@@ -329,8 +329,13 @@ public class LocalizationEnginePlugin: NSObject,
     }
 
     private func stopLocationUpdates() {
-        locationManager?.stopUpdatingLocation()
         print("GPS: Location updates stopped")
+
+        print("----- CALL STACK -----")
+        Thread.callStackSymbols.forEach { print($0) }
+        print("----------------------")
+
+        locationManager?.stopUpdatingLocation()
     }
 
     public func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
@@ -398,7 +403,6 @@ public class LocalizationEnginePlugin: NSObject,
 
         func onCancel(withArguments arguments: Any?) -> FlutterError? {
             plugin?.gpsEventSink = nil
-            plugin?.stopLocationUpdates()
             return nil
         }
     }
