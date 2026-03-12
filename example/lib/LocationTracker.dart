@@ -126,7 +126,7 @@ class LocationTracker {
 
   List<Map<String, dynamic>> bleDataList = [];
   Future<void> scanForRawBluetooth()async{
-    rawBluetoothScanResults = LocalizationEngine.rawBluetoothScanResults.listen((event){
+    rawBluetoothScanResults = LocalizationEngine.scanResultsForAllBeacons.listen((event){
       print("ble scan result $event \n");
       if(event != null){
         bleDataList.add(Map<String, dynamic>.from(event));
@@ -270,7 +270,12 @@ class LocationTracker {
     }
   }
 
+  void trackLocation(){
+    LocalizationEngine.startTrackingUserLocation(venueName: venueName);
+  }
+
   Future<void> stop() async {
+    LocalizationEngine.stopTrackingUserLocation();
     // Stop scanning
     await LocalizationEngine.stopScanning();
     log(peakValleyList.toString());

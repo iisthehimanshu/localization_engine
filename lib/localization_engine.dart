@@ -1,186 +1,130 @@
 import 'dart:async';
-import 'dart:developer';
 
 import 'package:adapter_manager/adapter_manager.dart';
-import 'package:flutter/services.dart';
+import 'package:device_meta/device_meta.dart';
 import 'package:localization_engine/location.dart';
-import 'package:localization_engine/src/GPS/GPSBuffer.dart';
-import 'package:localization_engine/src/localizationAlgorithm/_triangulationlLocalisation.dart';
+import 'package:localization_engine/src/network/api/UserTrackingWebSocket.dart';
 import 'package:localization_engine/src/network/api/localizationUsingMLModelapi.dart';
 
 import 'LocalizationException.dart';
 import 'Point.dart';
 import 'initialLocalization.dart';
+import 'ble_scanner.dart';
+import 'gps_scanner.dart';
+import 'nearest_beacon_resolver.dart';
 
 export 'Point.dart';
 export 'LocalizationException.dart';
-
 export 'package:adapter_manager/adapter_manager.dart';
 export 'package:adapter_manager/AdapterException.dart';
 export 'package:adapter_manager/UI/LocationServicesDialog.dart';
 
 class LocalizationEngine {
-  static const MethodChannel _methodChannel = MethodChannel('localization_engine');
-  static const EventChannel _bleEventChannel = EventChannel('ble_scan_stream');
-  static const EventChannel _gpsEventChannel = EventChannel('gps_scan_stream');
+  // ---------------------------------------------------------------------------
+  // State
+  // ---------------------------------------------------------------------------
+
   static InitialLocalization? _localization;
-  static StreamSubscription<dynamic>? _gpsSubscription;
-  static final gpsBuffer = GPSBuffer();
-
-  static Future<Map<String, dynamic>> _checkAllStatus() async {
-    final result = await AdapterManager.setupAllPermissionsAndAdapters();
-    return result;
-    if (result['success']) {
-      // _showSnackBar('All setup complete!');
-    } else {
-      // _showSnackBar('${result['errors']}');
-    }
-  }
-
-  static Future<void> _setVenue({required String venueName})async{
-    _localization = InitialLocalization(venueName);
-    _localization?.parseBeaconMap(venueName);
-  }
-
-  /// Initialize scanning with custom params
-  static Future<void> _initializeScanning({
-    required Duration? frequency,
-    required Duration? bufferSize,
-    required Duration? timeout, // null means no timeout
-    required bool immediateEmit,
-  }) async {
-    final params = {
-      'frequency': frequency?.inMilliseconds,
-      'bufferSize': bufferSize?.inMilliseconds,
-      'timeout': timeout?.inMilliseconds,
-      'immediateEmit': immediateEmit
-    };
-    await _methodChannel.invokeMethod('initializeScan', params);
-  }
-
+  static BleScanner? _ble;
+  static final _gps = GpsScanner();
   static bool _isScanning = false;
+  static final wsService = WebSocketService();
   static bool get isScanning => _isScanning;
 
+  // ---------------------------------------------------------------------------
+  // Public API – lifecycle
+  // ---------------------------------------------------------------------------
+
   static Future<void> startScanning({
-     Duration? frequency,
-     Duration? bufferSize,
-     Duration? timeout, // null means no timeout
-     bool immediateEmit = false, // null means no timeout
-     required String venueName
+    Duration? frequency,
+    Duration? bufferSize,
+    Duration? timeout,
+    bool immediateEmit = false,
+    required String venueName,
   }) async {
-    if (_isScanning) {
-      throw StateError('Scanning is already in progress');
+    if (_isScanning) throw StateError('Scanning is already in progress');
+
+    final adapterState = await AdapterManager.setupAllPermissionsAndAdapters();
+
+    if (!adapterState['success']) {
+      final error = adapterState['errors'].first as String;
+      if (adapterState['PermanentlyDenied'] == true) {
+        throw PermissionException(error);
+      }
+      throw AdapterException(error);
     }
-    var adapterState = await _checkAllStatus();
-    print("adapterState $adapterState");
-    if(adapterState['success']){
-      await _setVenue(venueName: venueName);
-      _initializeScanning(frequency: frequency, bufferSize: bufferSize, timeout: timeout, immediateEmit: immediateEmit);
-      await _methodChannel.invokeMethod('startGpsScan');
-      await _methodChannel.invokeMethod('startScan');
-      _isScanning = true;
-    }else if(adapterState['PermanentlyDenied']){
-      throw PermissionException(adapterState['errors'].first);
-    }else{
-      throw AdapterException(adapterState['errors'].first);
-    }
+
+    _localization = InitialLocalization(venueName)
+      ..parseBeaconMap(venueName);
+
+    _ble = BleScanner(
+      frequency: frequency,
+      bufferSize: bufferSize,
+      timeout: timeout,
+      immediateEmit: immediateEmit,
+    );
+
+    wsService.connect();
+
+    await _ble!.initialize();
+    await _gps.start();
+    await _ble!.start();
+
+    _isScanning = true;
   }
 
   static Future<void> stopScanning() async {
-    await _methodChannel.invokeMethod('stopScan');
-    await _methodChannel.invokeMethod('stopGpsScan');
+    await _ble?.stop();
+    await _gps.stop();
+    wsService.disconnect();
     _isScanning = false;
   }
 
-  /// Stream to listen to periodic scan results
-  /// Listen to BLE scan results as a stream of list of devices
-  static Stream<Pt?> get scanResults =>
-      _bleEventChannel.receiveBroadcastStream().asyncMap((event) async {
-        try {
-        final List<dynamic> rawList = event as List;
-
-        final Map<String, List<MapEntry<DateTime, int>>> formattedData = {};
-
-        for (var entry in rawList) {
-          final map = Map<String, dynamic>.from(entry);
-          final device = map['name'] as String;
-          if(!device.toLowerCase().contains("iw")) continue;
-          final timestamp = DateTime.fromMillisecondsSinceEpoch(map['timestamp']);
-          final rssi = map['rssi'] as int;
-          // print("scanResults map $map");
-
-          formattedData.putIfAbsent(device, () => []);
-          formattedData[device]!.add(MapEntry(timestamp, rssi));
-        }
-          return await _localization?.findLocation(formattedData);
-        } catch (e) {
-          print('Error processing scan result: $e');
-          return null; // or rethrow based on your needs
-        }
-      }).handleError((error) {
-        print('Stream error: $error');
-      });
-
-  static Stream<Map<String, dynamic>?> get rawBluetoothScanResults =>
-      _bleEventChannel.receiveBroadcastStream().asyncMap((event) async {
-        try {
-          final List<dynamic> rawList = event as List;
-          for(var entry in rawList){
-            final map = Map<String, dynamic>.from(entry);
-            return map;
-          }
-        } catch (e) {
-          print('Error processing rawBluetoothScanResults scan result: $e');
-          return null; // or rethrow based on your needs
-        }
-      }).handleError((error) {
-        print('Stream error: $error');
-      });
-
-  /// Stream to listen to periodic scan results
-  /// Listen to BLE scan results as a stream of list of devices
-  static Stream<Map<String, List<MapEntry<DateTime, int>>>?> get scanResultsForAllBeacons =>
-      _bleEventChannel.receiveBroadcastStream().asyncMap((event) async {
-        try {
-          final List<dynamic> rawList = event as List;
-
-          final Map<String, List<MapEntry<DateTime, int>>> formattedData = {};
-
-          for (var entry in rawList) {
-            final map = Map<String, dynamic>.from(entry);
-            final device = map['name'] as String;
-            if(!device.toLowerCase().contains("iw")) continue;
-            final timestamp = DateTime.fromMillisecondsSinceEpoch(map['timestamp']);
-            final rssi = map['rssi'] as int;
-            // print("scanResults map $map");
-
-            formattedData.putIfAbsent(device, () => []);
-            formattedData[device]!.add(MapEntry(timestamp, rssi));
-          }
-          return formattedData;
-          return _localization?.filterBeacons(formattedData);
-        } catch (e) {
-          print('Error processing scan result: $e');
-          return null; // or rethrow based on your needs
-        }
-      }).handleError((error) {
-        print('Stream error: $error');
-      });
-
-  static Future<dynamic> localizeUsingMLModelApiCall(Map<String, double> values) async {
-    print("localizeUsingMLModel $values");
-    dynamic result = await Localizationusingmlmodelapi().localize(values);
-    return result;
+  static Future<void> dispose() async {
+    await stopScanning();
+    _localization = null;
   }
 
-  static Stream<Map<String, dynamic>?> get gpsStreamRaw =>
-      _gpsEventChannel.receiveBroadcastStream().asyncMap((event) async {
-        return Map<String, dynamic>.from(event as Map);
-      }).handleError((error) {
-        print('gpsStreamRaw error: $error');
+  // ---------------------------------------------------------------------------
+  // Public API – streams
+  // ---------------------------------------------------------------------------
+
+  /// Emits the estimated [Pt] position on each BLE scan cycle.
+  static Stream<Pt?> get scanResults =>
+      _requireBle().beaconStream.asyncMap((data) async {
+        try {
+          return await _localization?.findLocation(data.readings);
+        } catch (e) {
+          print('Error processing scan result: $e');
+          return null;
+        }
+      }).handleError((Object e) => print('scanResults stream error: $e'));
+
+  /// Emits the raw beacon RSSI map on each BLE scan cycle.
+  static Stream<Map<String, List<MapEntry<DateTime, int>>>?> get scanResultsForAllBeacons =>
+      _requireBle().beaconStream.asyncMap((data) async {
+        try {
+          return data.readings;
+        } catch (e) {
+          print('Error processing scan result: $e');
+          return null;
+        }
       });
 
-  static Future<Map<String, dynamic>?> getCurrentLocation({required String venueName}) async {
+  /// Emits raw GPS data maps.
+  static Stream<Map<String, dynamic>> get gpsStreamRaw => _gps.rawStream;
+
+  // ---------------------------------------------------------------------------
+  // Public API – one-shot location
+  // ---------------------------------------------------------------------------
+
+  /// Starts scanning, waits for the first usable BLE event, then stops.
+  ///
+  /// Returns a JSON map with `beaconLocation` and `gpsLocation` fields,
+  /// or null on unexpected errors.
+  static Future<Map<String, dynamic>?> getCurrentLocation({
+    required String venueName,
+  }) async {
     try {
       await startScanning(
         frequency: const Duration(seconds: 5),
@@ -189,151 +133,151 @@ class LocalizationEngine {
         venueName: venueName,
       );
 
-      await _gpsSubscription?.cancel();
+      await _gps.start(); // ensure GPS is buffering while we wait for BLE
 
+      final scanData = await _waitForFirstBeaconData();
+      final filteredData = _localization?.filterBeacons(scanData) ?? scanData;
 
-      _gpsSubscription = _gpsEventChannel.receiveBroadcastStream().listen((data) {
-        print("gpsSubscription $data");
-        gpsBuffer.add(data['latitude'], data['longitude']);
-      },
-          onError: (error) {
-            print('GPS stream error: $error');
-          });
+      final resolver = NearestBeaconResolver(_localization!);
+      final beaconLocation = resolver.resolve(filteredData);
+      final gpsLocation = _gps.currentLocation;
 
-      print("gpsSubscription:${_gpsSubscription}");
-
-      // Wait for BLE event
-      final event = await _bleEventChannel
-          .receiveBroadcastStream()
-          .where((event) => event is List && event.isNotEmpty)
-          .first;
-
-      // log("getCurrentLocation event $event");
-
-      final List<dynamic> rawList = event as List;
-      Map<String, List<MapEntry<DateTime, int>>> formattedData = {};
-
-      for (var entry in rawList) {
-        final map = Map<String, dynamic>.from(entry);
-        final device = map['name'] as String;
-
-        if (!device.toLowerCase().contains("iw")) continue;
-
-        final timestamp = DateTime.fromMillisecondsSinceEpoch(map['timestamp']);
-        final rssi = map['rssi'] as int;
-
-        formattedData.putIfAbsent(device, () => []);
-        formattedData[device]!.add(MapEntry(timestamp, rssi));
-      }
-
-      if(_localization != null){
-        formattedData = _localization!.filterBeacons(formattedData);
-      }
-
-      String? bestBeacon;
-      double bestAvg = 90;
-      BeaconPointLocation? beaconLocation;
-
-      formattedData.forEach((beaconId, entries) {
-        if (entries.isEmpty) return;
-
-        var avg = entries
-            .map((e) => e.value)
-            .reduce((a, b) => a + b) /
-            entries.length;
-
-        avg = avg.abs();
-
-        if (avg < bestAvg) {
-          bestAvg = avg;
-          bestBeacon = beaconId;
-        }
-      });
-
-      log("nearestBeacon:${bestBeacon} ${bestAvg}");
-      if(bestBeacon != null){
-        var beacon = _localization?.getBeaconDetails(bestBeacon!);
-        if(beacon != null){
-          beaconLocation = BeaconPointLocation(x: beacon.coordinateX!, y: beacon.coordinateY!, bid: beacon.buildingID!, floor: beacon.floor!, latitude: double.parse(beacon.properties!.latitude!), longitude: double.parse(beacon.properties!.longitude!), beacons: [bestBeacon!]);
-        }
-      }
-      // else{
-      //   // Calculate avg RSSI per beacon
-      //   final List<MapEntry<String, double>> avgList = [];
-      //
-      //   formattedData.forEach((beaconId, entries) {
-      //     if (entries.isEmpty) return;
-      //
-      //     final avg = entries
-      //         .map((e) => e.value)
-      //         .reduce((a, b) => a + b) /
-      //         entries.length;
-      //
-      //     avgList.add(MapEntry(beaconId, avg));
-      //   });
-      //
-      //   // Sort by nearest (lowest avg RSSI)
-      //   avgList.sort((a, b) => a.value.compareTo(b.value));
-      //
-      //   // Take top 3
-      //   final top3 = avgList.take(3).toList();
-      //   log("Top 3 beacons: $top3");
-      //   var topBeacon = _localization?.getBeaconDetails(top3.first.key);
-      //
-      //   var list = top3.map((b)
-      //   {
-      //     var beaconDetails = _localization?.getBeaconDetails(b.key);
-      //     return Beacon(id: b.key, location: Point2D(beaconDetails!.coordinateX!.toDouble(), beaconDetails.coordinateY!.toDouble()), rssi: b.value);
-      //   }).toList();
-      //
-      //   list.forEach((item){
-      //     print("beacon ${item.toString()}");
-      //   });
-      //
-      //   TriangulationResult triangulationResult = triangulate(list);
-      //   print(" triangulationResult.estimatedPosition.x ${ triangulationResult.estimatedPosition.x}");
-      //   beaconLocation = BeaconPointLocation(x: triangulationResult.estimatedPosition.x.toInt(), y: triangulationResult.estimatedPosition.y.toInt(), bid: topBeacon!.buildingID!, floor: topBeacon.floor!, latitude: double.parse(topBeacon.properties!.latitude!), longitude: double.parse(topBeacon.properties!.longitude!), beacons: top3.map((b)=>b.key).toList());
-      // }
-
-      GPSLocation? gpsLocation;
-      List<double>? gpsBufferLocation = gpsBuffer.getRobustPosition();
-      print("gpsLocation $gpsBufferLocation");
-      if(gpsBufferLocation != null && gpsBufferLocation.isNotEmpty){
-        gpsLocation = GPSLocation(latitude: gpsBufferLocation[0], longitude: gpsBufferLocation[1]);
-      }
-
-      LocalizationEngineLocation location = LocalizationEngineLocation(beaconLocation: beaconLocation, gpsLocation: gpsLocation);
-
-      return location.toJson();
-
-    }on StateError{
-      await stopScanning();
-      GPSLocation? gpsLocation;
-      List<double>? gpsBufferLocation = gpsBuffer.getRobustPosition();
-      print("gpsLocation $gpsBufferLocation");
-      if(gpsBufferLocation != null && gpsBufferLocation.isNotEmpty){
-        gpsLocation = GPSLocation(latitude: gpsBufferLocation[0], longitude: gpsBufferLocation[1]);
-      }
-
-      LocalizationEngineLocation location = LocalizationEngineLocation(beaconLocation: null, gpsLocation: gpsLocation);
-      return location.toJson();
-
-    }on AdapterException{
+      return LocalizationEngineLocation(
+        beaconLocation: beaconLocation,
+        gpsLocation: gpsLocation,
+      ).toJson();
+    } on StateError {
+      // Already scanning – return whatever GPS data we have.
+      return LocalizationEngineLocation(
+        beaconLocation: null,
+        gpsLocation: _gps.currentLocation,
+      ).toJson();
+    } on AdapterException {
       rethrow;
-    }on PermissionException{
+    } on PermissionException {
       rethrow;
-    }catch (_){
+    } catch (_) {
       return null;
-    }finally{
+    } finally {
       await stopScanning();
     }
   }
 
+  static Timer? _trackingTimer;
+  static StreamSubscription? _beaconSubscription;
+  static Map<String, List<MapEntry<DateTime, int>>> _beaconBuffer = {};
 
-  static Future<void> dispose() async {
+  /// Start continuous location tracking — resolves & emits every 5 seconds.
+  static Future<void> startTrackingUserLocation({
+    required String venueName,
+  }) async {
+    final deviceMeta = await DeviceMeta.init(storageKey: "localizationEngine");
+
+    await startScanning(
+      immediateEmit: true,
+      venueName: venueName,
+    );
+
+    // Buffer incoming beacon readings, merging into the window map
+    _beaconBuffer.clear();
+    _beaconSubscription?.cancel();
+    _beaconSubscription = scanResultsForAllBeacons.listen((scanData) {
+      if (scanData == null) return;
+      scanData.forEach((key, entries) {
+        _beaconBuffer.putIfAbsent(key, () => []).addAll(entries);
+      });
+    });
+
+    _trackingTimer?.cancel();
+    _trackingTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
+      try {
+        // Snapshot and clear the buffer for this window
+        final windowData = Map<String, List<MapEntry<DateTime, int>>>.from(_beaconBuffer);
+        _beaconBuffer.clear();
+
+        if (windowData.isEmpty) {
+          print('[Tracking] ⚠️ No beacon data in this window, skipping emit.');
+          return;
+        }
+
+        final filteredData = windowData;
+        final resolver = NearestBeaconResolver(_localization!);
+        final beaconLocation = resolver.resolve(filteredData);
+        final gpsLocation = _gps.currentLocation;
+
+        if (beaconLocation == null) {
+          print('[Tracking] ⚠️ Could not resolve beacon location, skipping emit.');
+          return;
+        }
+
+        final payload = TrackingPayload(
+          id: deviceMeta.uuid!,
+          t: DateTime.now().millisecondsSinceEpoch,
+          pts: {
+            'nb': [
+              beaconLocation.x,
+              beaconLocation.y,
+              int.parse(beaconLocation.latitude.toString().replaceAll('.', '')),
+              int.parse(beaconLocation.longitude.toString().replaceAll('.', '')),
+              beaconLocation.floor,
+              1,
+            ],
+            if (gpsLocation != null)
+              'gp': [
+                null,
+                null,
+                int.parse(gpsLocation.latitude.toString().replaceAll('.', '')),
+                int.parse(gpsLocation.longitude.toString().replaceAll('.', '')),
+                null,
+                2,
+              ],
+          },
+        );
+
+        wsService.sendTracking(payload);
+      } catch (e) {
+        print('[Tracking] ❌ Error during periodic emit: $e');
+      }
+    });
+  }
+
+  /// Stop continuous tracking and clean up
+  static Future<void> stopTrackingUserLocation() async {
+    _trackingTimer?.cancel();
+    _trackingTimer = null;
+    await _beaconSubscription?.cancel();
+    _beaconSubscription = null;
+    _beaconBuffer.clear();
     await stopScanning();
-    _localization = null;
-    _isScanning = false;
+    print('[Tracking] 🛑 Stopped tracking.');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Public API – ML model
+  // ---------------------------------------------------------------------------
+
+  static Future<dynamic> localizeUsingMLModelApiCall(
+    Map<String, double> values,
+  ) async {
+    print('localizeUsingMLModel $values');
+    return Localizationusingmlmodelapi().localize(values);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private helpers
+  // ---------------------------------------------------------------------------
+
+  static BleScanner _requireBle() {
+    assert(_ble != null, 'Call startScanning() before accessing BLE streams.');
+    return _ble!;
+  }
+
+  /// Waits for the first non-empty BLE beacon data frame.
+  static Future<Map<String, List<MapEntry<DateTime, int>>>> _waitForFirstBeaconData() async {
+    final data = await _requireBle()
+        .beaconStream
+        .where((d) => !d.isEmpty)
+        .first;
+    return data.readings;
   }
 }
-

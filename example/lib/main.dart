@@ -77,36 +77,15 @@ class _MyAppState extends State<MyApp> {
     }
   }
 
+  Future<void> _trackUser() async {
+      locationTracker.trackLocation();
+  }
+
   StreamSubscription<Map<String, List<MapEntry<DateTime, int>>>?>?
   _allBeaconSubscription;
 
   final StreamController<Map<String, List<int>>> beaconStreamController =
   StreamController.broadcast();
-
-  Future<void> peakValley() async {
-    _allBeaconSubscription =
-        LocalizationEngine.scanResultsForAllBeacons.listen(
-              (rawBeaconList) {
-            if (rawBeaconList == null) return;
-
-            final beaconData = rawBeaconList.map(
-                  (key, value) => MapEntry(
-                key,
-                value.map((e) => e.value).toList(),
-              ),
-            );
-
-            beaconStreamController.add(beaconData);
-          },
-          onError: (e) => log('Localization error: $e'),
-        );
-
-    await LocalizationEngine.startScanning(
-      frequency: const Duration(seconds: 2),
-      bufferSize: const Duration(seconds: 2),
-      venueName: 'NationalZoologicalPark',
-    );
-  }
 
   Future<Map<String, dynamic>?> _getCurrentLocation() async {
     await _requestBluetoothPermission();
@@ -154,6 +133,11 @@ class _MyAppState extends State<MyApp> {
               IconButton(
                 onPressed: _startPeakValley,
                 icon: const Icon(Icons.auto_graph),
+              ),
+              const SizedBox(height: 12),
+              IconButton(
+                onPressed: _trackUser,
+                icon: const Icon(Icons.interests),
               ),
               const SizedBox(height: 12),
               Row(
