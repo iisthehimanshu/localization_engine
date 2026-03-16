@@ -7,7 +7,7 @@ dependencies:
   localization_engine: 
     git: 
       url: https://github.com/iisthehimanshu/localization_engine.git
-      ref: main
+      ref: v2
 ```
 
 Then run:
@@ -46,12 +46,16 @@ class LocationTracker {
 
   Future<void> start() async {
 
-    // 1. Listen to position updates
-    _subscription = LocalizationEngine.scanResults.listen(
-          (position) {
-        if (position != null) {
-          print('Current position: $position');
-          // Update UI with new position
+    await LocalizationEngine.startScanning(
+      immediateEmit: true,
+      venueName: 'IITDelhi', // Required
+    );
+
+    _subscription = LocalizationEngine.scanResultsForAllBeacons.listen(
+          (event) {
+        print("ble scan result $event \n");
+        if(event != null){
+          print(Map<String, dynamic>.from(event));
         }
       },
       onError: (error) {
@@ -59,13 +63,6 @@ class LocationTracker {
       },
     );
 
-    // 2. Start scanning
-    await LocalizationEngine.startScanning(
-      frequency: const Duration(seconds: 6), // Optional (Default Duration(seconds: 6))
-      bufferSize: const Duration(seconds: 6), // Optional (Default Duration(seconds: 6))
-      timeout: const Duration(minutes: 5),
-      venueName: 'IITDelhi', // Required
-    );
   }
 
   Future<void> stop() async {
