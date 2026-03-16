@@ -126,16 +126,18 @@ class LocationTracker {
 
   List<Map<String, dynamic>> bleDataList = [];
   Future<void> scanForRawBluetooth()async{
+    await LocalizationEngine.startScanning(
+      immediateEmit: true,
+      venueName: venueName, // Required
+    );
+
     rawBluetoothScanResults = LocalizationEngine.scanResultsForAllBeacons.listen((event){
       print("ble scan result $event \n");
       if(event != null){
         bleDataList.add(Map<String, dynamic>.from(event));
       }
     });
-    await LocalizationEngine.startScanning(
-      immediateEmit: true,
-      venueName: venueName, // Required
-    );
+
   }
 
   List<DateTime> beaconCrossingTimes = [];
