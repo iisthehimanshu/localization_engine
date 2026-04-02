@@ -9,11 +9,13 @@ class TrackingPayload {
   final String id;
   final int t;
   final Map<String, List<int?>> pts;
+  final String venueName;
 
   TrackingPayload({
     required this.id,
     required this.t,
     required this.pts,
+    required this.venueName
   });
 
   Map<String, dynamic> toJson() {
@@ -21,6 +23,7 @@ class TrackingPayload {
       'id': id,
       't': t,
       'pts': pts,
+      'buildingId': venueName
     };
   }
 }

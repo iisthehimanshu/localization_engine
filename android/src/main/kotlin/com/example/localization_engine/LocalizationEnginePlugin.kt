@@ -33,14 +33,9 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
   private var scanCallback: ScanCallback? = null
   private var mainHandler = Handler(Looper.getMainLooper())
 
-  private var frequency: Long? = null
-  private var bufferSize: Long? = null
   private var timeout: Long? = null
-  private var immediateEmit: Boolean = false  // Option to emit immediately
-  private val restartInterval: Long = 60000L  // Restart scan every 60 seconds (1 minute)
+  private val restartInterval: Long = 60000L
 
-  private var scanBuffer = mutableListOf<Pair<Long, ScanResult>>()
-  private var scanTimerRunnable: Runnable? = null
   private var timeoutRunnable: Runnable? = null
   private var restartTimerRunnable: Runnable? = null
   private var eventSink: EventChannel.EventSink? = null
@@ -66,10 +61,7 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
   override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
     when (call.method) {
       "initializeScan" -> {
-        frequency = call.argument<Int>("frequency")?.toLong() ?: null
-        bufferSize = call.argument<Int>("bufferSize")?.toLong() ?: 5000L
         timeout = call.argument<Int?>("timeout")?.toLong()
-        immediateEmit = call.argument<Boolean>("immediateEmit") ?: false
         result.success(null)
       }
       "startScan" -> {
@@ -97,7 +89,6 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
   private fun startScanning() {
     isScanning = true
-    scanBuffer.clear()
     startBleScan()
     schedulePeriodicRestart()
   }
@@ -107,7 +98,6 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
     scanCallback = object : ScanCallback() {
       override fun onScanResult(callbackType: Int, result: ScanResult) {
-
         val deviceName =
           result.scanRecord?.deviceName
             ?: result.device.name
@@ -116,9 +106,7 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         if (!deviceName.startsWith("IW", ignoreCase = true)) return
 
         val manufacturerData = result.scanRecord?.manufacturerSpecificData
-
         var manufacturerHex: String? = null
-
         manufacturerData?.let { data ->
           if (data.size() > 0) {
             val bytes = data.valueAt(0)
@@ -126,97 +114,30 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
           }
         }
 
-        val timestamp = System.currentTimeMillis()
-        val dateTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.getDefault()).format(java.util.Date(System.currentTimeMillis()))
+        val dateTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.getDefault())
+          .format(java.util.Date(System.currentTimeMillis()))
 
-        // Emit immediately if immediateEmit is true
-        if (immediateEmit) {
-          val resultMap = mapOf(
-            "device" to result.device.address,
-            "name" to deviceName,
-            "rssi" to result.rssi,
-            "timestamp" to dateTime,
-            "manufacturerHex" to manufacturerHex
-          )
-          eventSink?.success(listOf(resultMap))
-        }
-
-        // Always buffer if frequency is set (for periodic emission)
-        if (frequency != null) {
-          scanBuffer.add(Pair(timestamp, result))
-          if (bufferSize != null) {
-            scanBuffer.removeAll { it.first < timestamp - bufferSize!! }
-          }
-        } else if (!immediateEmit) {
-          // Legacy behavior: if frequency is null and immediateEmit is false, emit immediately
-          val resultMap = mapOf(
-            "device" to result.device.address,
-            "name" to deviceName,
-            "rssi" to result.rssi,
-            "timestamp" to dateTime,
-            "manufacturerHex" to manufacturerHex
-          )
-          eventSink?.success(listOf(resultMap))
-        }
+        val resultMap = mapOf(
+          "device" to result.device.address,
+          "name" to deviceName,
+          "rssi" to result.rssi,
+          "timestamp" to dateTime,
+          "manufacturerHex" to manufacturerHex
+        )
+        eventSink?.success(listOf(resultMap))
       }
     }
 
-    // Configure scan settings for faster beacon detection
     val scanSettings = ScanSettings.Builder()
-      .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)  // Fastest scan mode - uses more battery but detects beacons quickly
-      .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)  // Report all advertisements immediately
-      .setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)  // More aggressive matching for faster detection
-      .setNumOfMatches(ScanSettings.MATCH_NUM_MAX_ADVERTISEMENT)  // Report maximum number of advertisements
-      .setReportDelay(0L)  // No delay - report results immediately
+      .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+      .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
+      .setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)
+      .setNumOfMatches(ScanSettings.MATCH_NUM_MAX_ADVERTISEMENT)
+      .setReportDelay(0L)
       .build()
 
     bluetoothLeScanner?.startScan(null, scanSettings, scanCallback)
     Log.d("BLE", "BLE scan started")
-
-    // Only set up timer if frequency is not null
-    if (frequency != null) {
-      scanTimerRunnable = object : Runnable {
-        override fun run() {
-          if (!isScanning) return  // Safety check
-
-          // code for bluetooth off during scanning
-          val isBluetoothEnabled = bluetoothAdapter?.isEnabled ?: false
-          if (!isBluetoothEnabled) {
-            Log.w("BluetoothCheck", "Bluetooth is OFF - stopping scan")
-            stopScanning()
-            return
-          }
-
-          val resultsMap = scanBuffer.map {
-
-            val manufacturerData = it.second.scanRecord?.manufacturerSpecificData
-            var manufacturerHex: String? = null
-
-            manufacturerData?.let { data ->
-              if (data.size() > 0) {
-                val bytes = data.valueAt(0)
-                manufacturerHex = bytes.joinToString("") { "%02X".format(it) }
-              }
-            }
-
-            mapOf(
-              "device" to it.second.device.address,
-              "name" to (it.second.scanRecord?.deviceName ?: it.second.device.name ?: "Unknown"),
-              "rssi" to it.second.rssi,
-              "timestamp" to it.first,
-              "manufacturerHex" to manufacturerHex
-            )
-          }
-          eventSink?.success(resultsMap)
-
-          if (isScanning) {
-            mainHandler.postDelayed(this, frequency!!)
-          }
-        }
-      }
-
-      mainHandler.post(scanTimerRunnable!!)
-    }
 
     timeout?.let {
       timeoutRunnable = Runnable { stopScanning() }
@@ -227,58 +148,42 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
   private fun schedulePeriodicRestart() {
     restartTimerRunnable = object : Runnable {
       override fun run() {
-        if (!isScanning) return  // Don't restart if scanning was stopped
+        if (!isScanning) return
 
         Log.d("BLE", "Restarting BLE scan (periodic 1-minute restart)")
 
-        // Stop the current scan
         val bluetoothLeScanner = bluetoothAdapter?.bluetoothLeScanner
         scanCallback?.let { bluetoothLeScanner?.stopScan(it) }
 
-        // Remove the periodic emission callback temporarily
-        scanTimerRunnable?.let { mainHandler.removeCallbacks(it) }
-
-        // Small delay before restarting to ensure clean stop
         mainHandler.postDelayed({
           if (isScanning) {
             startBleScan()
           }
         }, 100)
 
-        // Schedule next restart
         if (isScanning) {
           mainHandler.postDelayed(this, restartInterval)
         }
       }
     }
 
-    // Start the periodic restart timer
     mainHandler.postDelayed(restartTimerRunnable!!, restartInterval)
     Log.d("BLE", "Scheduled periodic BLE scan restart every ${restartInterval}ms")
   }
 
   private fun stopScanning() {
-    if (!isScanning) return  // Already stopped
+    if (!isScanning) return
 
     isScanning = false
 
-    // Remove all callbacks FIRST
-    scanTimerRunnable?.let { mainHandler.removeCallbacks(it) }
     timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
     restartTimerRunnable?.let { mainHandler.removeCallbacks(it) }
 
-    // Stop the BLE scan
     val bluetoothLeScanner = bluetoothAdapter?.bluetoothLeScanner
     scanCallback?.let { bluetoothLeScanner?.stopScan(it) }
 
-    // Clear the buffer
-    scanBuffer.clear()
-
-    // End the stream
     eventSink?.endOfStream()
 
-    // Clear references
-    scanTimerRunnable = null
     timeoutRunnable = null
     restartTimerRunnable = null
 
@@ -297,7 +202,6 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
       return
     }
 
-    // Check if GPS or Network provider is enabled
     val isGpsEnabled = locationManager?.isProviderEnabled(LocationManager.GPS_PROVIDER) ?: false
     val isNetworkEnabled = locationManager?.isProviderEnabled(LocationManager.NETWORK_PROVIDER) ?: false
 
@@ -310,15 +214,14 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     if (isGpsEnabled) {
       locationManager?.requestLocationUpdates(
         LocationManager.GPS_PROVIDER,
-        1000, // Time interval in milliseconds
-        0f,  // Distance interval in meters
+        1000,
+        0f,
         locationListener
       )
       Log.d("GPS", "GPS location updates started")
     }
   }
 
-  // Persistent LocationListener to prevent garbage collection
   private val locationListener = object : LocationListener {
     override fun onLocationChanged(location: Location) {
       val data = mapOf(
@@ -369,7 +272,6 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
     override fun onCancel(arguments: Any?) {
       gpsEventSink = null
-//      stopLocationUpdates()
     }
   }
 

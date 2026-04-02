@@ -56,7 +56,13 @@ class BeaconScanData {
       final device = map['name'] as String;
       if (!device.toLowerCase().contains('iw')) continue;
 
-      final timestamp = DateTime.parse(map['timestamp']);
+      final raw = map['timestamp'];
+      DateTime timestamp;
+      if (raw is int) {
+        timestamp = DateTime.fromMillisecondsSinceEpoch(raw);
+      } else{
+        timestamp = DateTime.parse(raw);
+      }
       final rssi = map['rssi'] as int;
 
       data.putIfAbsent(device, () => []).add(MapEntry(timestamp, rssi));

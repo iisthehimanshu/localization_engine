@@ -1,3 +1,5 @@
+import 'dart:math';
+
 class Beacon {
   Element? element;
   Properties? properties;
@@ -40,6 +42,12 @@ class Beacon {
         this.createdAt,
         this.updatedAt
       });
+
+  double distanceTo(Beacon other) {
+    final dx = coordinateX!.toInt() - other.coordinateX!.toInt();
+    final dy = coordinateY!.toInt() - other.coordinateY!.toInt();
+    return sqrt(dx * dx + dy * dy) * 0.3;
+  }
 
   Beacon.fromJson(Map<dynamic, dynamic> json) {
     element =
