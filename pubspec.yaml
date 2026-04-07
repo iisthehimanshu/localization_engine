@@ -18,7 +18,7 @@ dependencies:
 #    path: ../../adapter_manager/
 
   socket_io_client:
-  device_meta:
+  device_info_plus: ^10.1.2
 
 
   plugin_platform_interface: ^2.0.2

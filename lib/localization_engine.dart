@@ -1,7 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
 
 import 'package:adapter_manager/adapter_manager.dart';
-import 'package:device_meta/device_meta.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:localization_engine/src/GPS/GPSBuffer.dart';
 import 'package:localization_engine/src/config/config.dart';
@@ -215,20 +219,61 @@ class LocalizationEngine{
     return result;
   }
 
+  Future<String> _getDeviceId() async {
+    try {
+      final DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
+      String? id;
+      if (kIsWeb) {
+        final webInfo = await deviceInfo.webBrowserInfo;
+        id = 'web_${webInfo.userAgent.hashCode}';
+      } else if (Platform.isAndroid) {
+        final androidInfo = await deviceInfo.androidInfo;
+        id = androidInfo.id;
+      } else if (Platform.isIOS) {
+        final iosInfo = await deviceInfo.iosInfo;
+        id = iosInfo.identifierForVendor;
+      } else if (Platform.isMacOS) {
+        final macInfo = await deviceInfo.macOsInfo;
+        id = macInfo.systemGUID;
+      } else if (Platform.isWindows) {
+        final windowsInfo = await deviceInfo.windowsInfo;
+        id = windowsInfo.deviceId;
+      } else if (Platform.isLinux) {
+        final linuxInfo = await deviceInfo.linuxInfo;
+        id = linuxInfo.machineId;
+      }
+      if(id == null){
+        return _generateFallbackId();
+      }else{
+        return id;
+      }
+    } catch (e) {
+      print("❌ Error getting device ID: $e");
+      return _generateFallbackId();
+    }
+  }
+
+  String _generateFallbackId() {
+    final random = Random.secure();
+    final values = List<int>.generate(16, (i) => random.nextInt(256));
+    return base64UrlEncode(values).substring(0, 22);
+  }
+
   Future<void> _trackUserLocation({
     required String venueName,
   }) async {
-    final deviceMeta = await DeviceMeta.init(storageKey: "localizationEngine");
+    print("_trackUserLocation");
+    final deviceId = await _getDeviceId();
+    print("_trackUserLocation $deviceId");
     wsService.connect();
 
     _userLocation.stream.listen((data){
       BeaconPointLocation? beaconLocation = data.beaconLocation;
       GPSLocation? gpsLocation = data.gpsLocation;
-
       if(gpsLocation == null && beaconLocation == null) return;
 
       final payload = TrackingPayload(
-        id: deviceMeta.uuid!,
+        id: deviceId,
         t: DateTime.now().millisecondsSinceEpoch,
         pts: {
           if(beaconLocation != null)
