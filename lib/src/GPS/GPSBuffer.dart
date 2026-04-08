@@ -13,6 +13,11 @@ class GPSBuffer {
     print("_latitudes $_latitudes, _longitudes $_longitudes");
   }
 
+  void clear(){
+    _latitudes.clear();
+    _longitudes.clear();
+  }
+
   List<double>? getRobustPosition() {
     List<double>? filterOutliers(List<double> values) {
       List<double> sorted = [...values]..sort();
@@ -38,8 +43,7 @@ class GPSBuffer {
     double initLon = filteredLon.isNotEmpty
         ? avg(filteredLon)
         : _longitudes[_longitudes.length ~/ 2];
-    _latitudes.clear();
-    _longitudes.clear();
+    clear();
     return [initLat, initLon];
   }
 }

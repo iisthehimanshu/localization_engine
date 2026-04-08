@@ -44,6 +44,23 @@ class LocalizationEngine{
     _trackUserLocation(venueName: venueName);
   }
 
+  Future<void> restart({required String venueName}) async {
+    // Stop any active scanning first
+    if (_isScanning) {
+      await _stopScanning();
+    }
+
+    // Reset internal state
+    _localization = null;
+    _gpsBuffer.clear();
+
+    // Reconnect WebSocket
+    wsService.connect();
+
+    // Reinitialize
+    await init(venueName: venueName);
+  }
+
   Future<Map<String, dynamic>> _checkAllStatus() async {
     final result = await AdapterManager.setupAllPermissionsAndAdapters();
     return result;
@@ -58,7 +75,7 @@ class LocalizationEngine{
     required String venueName
   }) async {
     if (_isScanning) {
-      throw StateError('Scanning is already in progress');
+      await _stopScanning();
     }
     var adapterState = await _checkAllStatus();
     print("adapterState $adapterState");
