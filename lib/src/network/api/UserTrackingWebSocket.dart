@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:localization_engine/src/config/config.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 
 // ─────────────────────────────────────────────
@@ -33,9 +34,8 @@ class TrackingPayload {
 // ─────────────────────────────────────────────
 
 class WebSocketService {
-  static const String _baseUrl = 'https://dev.iwayplus.in';
   static const String _eventName = 'send-tracking';
-  static const String _apiKey = '7cc62870-d67e-11f0-91ed-2f0eb903e7db';
+
 
   IO.Socket? _socket;
   bool _isConnected = false;
@@ -43,11 +43,11 @@ class WebSocketService {
   /// Connect to the WebSocket server
   void connect() {
     _socket = IO.io(
-      _baseUrl,
+      AppConfig.baseUrl,
       IO.OptionBuilder()
           .setTransports(['websocket'])
-          .setExtraHeaders({'apikey': _apiKey})
-          .setQuery({'apikey': _apiKey})
+          .setExtraHeaders({'apikey': AppConfig.apiKey})
+          .setQuery({'apikey': AppConfig.apiKey})
           .enableAutoConnect()
           .enableReconnection()
           .setReconnectionAttempts(5)
@@ -63,7 +63,7 @@ class WebSocketService {
   void _registerEventListeners() {
     _socket!.onConnect((_) {
       _isConnected = true;
-      print('[WebSocket] ✅ Connected to $_baseUrl');
+      print('[WebSocket] ✅ Connected to ${AppConfig.baseUrl}');
     });
 
     _socket!.onDisconnect((_) {
