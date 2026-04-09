@@ -136,7 +136,7 @@ class LocalizationEngine{
     });
 
     final gpsSubscription = gpsScanResults.listen((data) {
-      if (data != null) gpsData.add(data);
+      if (data != null && data['provider'] != 'network') gpsData.add(data);
     });
 
     Future<void> collectAndEmit() async {
