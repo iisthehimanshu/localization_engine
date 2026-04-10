@@ -220,38 +220,18 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
       )
       Log.d("GPS", "GPS location updates started")
     }
-
-    // ✅ Added: register network provider as fallback/complement
-    if (isNetworkEnabled) {
-      locationManager?.requestLocationUpdates(
-        LocationManager.NETWORK_PROVIDER,
-        1000,
-        0f,
-        locationListener
-      )
-      Log.d("GPS", "Network location updates started")
-    }
-
   }
 
   private val locationListener = object : LocationListener {
     override fun onLocationChanged(location: Location) {
-      // ✅ Added: "provider" field so the caller knows the fix source
-      val providerLabel = when (location.provider) {
-        LocationManager.GPS_PROVIDER     -> "gps"
-        LocationManager.NETWORK_PROVIDER -> "network"
-        else                             -> location.provider ?: "unknown"
-      }
-
       val data = mapOf(
-        "latitude"  to location.latitude,
+        "latitude" to location.latitude,
         "longitude" to location.longitude,
-        "accuracy"  to location.accuracy,
-        "bearing"   to location.bearing,
-        "altitude"  to location.altitude,
-        "speed"     to location.speed,
-        "timestamp" to location.time,
-        "provider"  to providerLabel   // ✅ "gps" | "network" | "unknown"
+        "accuracy" to location.accuracy,
+        "bearing" to location.bearing,
+        "altitude" to location.altitude,
+        "speed" to location.speed,
+        "timestamp" to location.time
       )
       gpsEventSink?.success(data)
     }
@@ -259,17 +239,12 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
 
     override fun onProviderEnabled(provider: String) {
-      Log.d("GPS", "$provider provider enabled")
+      Log.d("GPS", "GPS Provider enabled")
     }
 
     override fun onProviderDisabled(provider: String) {
-      Log.d("GPS", "$provider provider disabled")
-      // ✅ Only surface a fatal error when BOTH providers are gone
-      val gpsGone     = locationManager?.isProviderEnabled(LocationManager.GPS_PROVIDER)     == false
-      val networkGone = locationManager?.isProviderEnabled(LocationManager.NETWORK_PROVIDER) == false
-      if (gpsGone && networkGone) {
-        gpsEventSink?.error("ALL_PROVIDERS_DISABLED", "All location providers are disabled", null)
-      }
+      Log.d("GPS", "GPS Provider disabled")
+      gpsEventSink?.error("GPS_DISABLED", "GPS provider is disabled", null)
     }
   }
 

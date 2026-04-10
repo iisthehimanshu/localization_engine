@@ -141,7 +141,7 @@ class LocalizationEngine{
 
     Future<void> collectAndEmit() async {
       // Wait for data to accumulate
-      await Future.delayed(const Duration(seconds: 6));
+      await Future.delayed(const Duration(seconds: 3));
 
       // Snapshot and clear buffers atomically for this window
       final bleBatch = List<Map<String, dynamic>>.from(bleData);
