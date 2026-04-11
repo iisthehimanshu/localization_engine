@@ -49,6 +49,7 @@ class LocalizationEngine{
     if (_isScanning) {
       await _stopScanning();
     }
+    _userLocation.close();
 
     // Reset internal state
     _localization = null;
@@ -118,7 +119,7 @@ class LocalizationEngine{
         return Map<String, dynamic>.from(event as Map);
       }).handleError((error) {
         print('gpsStreamRaw error: $error');
-      });
+      }).asBroadcastStream();
 
   Future<void> _getCurrentLocation({
     required String venueName,
@@ -136,7 +137,7 @@ class LocalizationEngine{
     });
 
     final gpsSubscription = gpsScanResults.listen((data) {
-      if (data != null && data['provider'] != 'network') gpsData.add(data);
+      if (data != null) gpsData.add(data);
     });
 
     Future<void> collectAndEmit() async {
@@ -187,7 +188,7 @@ class LocalizationEngine{
 
       } on AdapterException {
         bleSubscription.cancel();
-        gpsSubscription.cancel();
+        // gpsSubscription.cancel();
         rethrow;
       } on PermissionException {
         bleSubscription.cancel();
@@ -202,8 +203,8 @@ class LocalizationEngine{
       }
     } finally {
       // Guaranteed cleanup if the loop ever exits
-      bleSubscription.cancel();
-      gpsSubscription.cancel();
+      // bleSubscription.cancel();
+      // gpsSubscription.cancel();
     }
   }
 
