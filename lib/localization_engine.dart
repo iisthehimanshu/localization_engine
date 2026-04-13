@@ -84,6 +84,7 @@ class LocalizationEngine{
       await _setVenue(venueName: venueName);
       await _methodChannel.invokeMethod('startGpsScan');
       await _methodChannel.invokeMethod('startScan');
+      initGpsStream();
       _isScanning = true;
     }else if(adapterState['PermanentlyDenied']){
       throw PermissionException(adapterState['errors'].first);
@@ -114,12 +115,27 @@ class LocalizationEngine{
         print('Stream error: $error');
       }).asBroadcastStream();
 
-  Stream<Map<String, dynamic>?> get gpsScanResults =>
-      _gpsEventChannel.receiveBroadcastStream().asyncMap((event) async {
-        return Map<String, dynamic>.from(event as Map);
-      }).handleError((error) {
-        print('gpsStreamRaw error: $error');
-      }).asBroadcastStream();
+  final _gpsController = StreamController<Map<String, dynamic>?>.broadcast();
+
+  Stream<Map<String, dynamic>?> get gpsScanResults => _gpsController.stream;
+
+  StreamSubscription? _gpsSubscription;
+
+  void initGpsStream() {
+    _gpsSubscription ??= _gpsEventChannel
+        .receiveBroadcastStream()
+        .listen((event) {
+      try {
+        final map = Map<String, dynamic>.from(event as Map);
+        _gpsController.add(map);
+      } catch (e) {
+        print('gpsStreamRaw error: $e');
+        _gpsController.add(null);
+      }
+    }, onError: (error) {
+      print('gpsStreamRaw error: $error');
+    });
+  }
 
   Future<void> _getCurrentLocation({
     required String venueName,
@@ -137,6 +153,7 @@ class LocalizationEngine{
     });
 
     final gpsSubscription = gpsScanResults.listen((data) {
+      print("gpsSubscriptionDebuggggg  data incoming ${data}");
       if (data != null) gpsData.add(data);
     });
 
@@ -197,15 +214,14 @@ class LocalizationEngine{
       } catch (_) {}
     }
 
-    try {
       while (true) {
+      try{
         await collectAndEmit();
+      }catch(e){
+        print("error in getCurrent Location gpsSubscriptionDebuggggg ${e}");
       }
-    } finally {
-      // Guaranteed cleanup if the loop ever exits
-      // bleSubscription.cancel();
-      // gpsSubscription.cancel();
-    }
+
+      }
   }
 
   Map<String, List<MapEntry<DateTime, int>>> groupByDevice(
