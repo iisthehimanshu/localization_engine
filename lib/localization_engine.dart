@@ -85,6 +85,7 @@ class LocalizationEngine{
       await _methodChannel.invokeMethod('startGpsScan');
       await _methodChannel.invokeMethod('startScan');
       initGpsStream();
+      initBleStream();
       _isScanning = true;
     }else if(adapterState['PermanentlyDenied']){
       throw PermissionException(adapterState['errors'].first);
@@ -99,21 +100,31 @@ class LocalizationEngine{
     _isScanning = false;
   }
 
-  Stream<Map<String, dynamic>?> get bluetoothScanResults =>
-      _bleEventChannel.receiveBroadcastStream().asyncMap((event) async {
-        try {
-          final List<dynamic> rawList = event as List;
-          for(var entry in rawList){
-            final map = Map<String, dynamic>.from(entry);
-            return map;
-          }
-        } catch (e) {
-          print('Error processing rawBluetoothScanResults scan result: $e');
-          return null; // or rethrow based on your needs
+  final _bleController = StreamController<Map<String, dynamic>?>.broadcast();
+
+  Stream<Map<String, dynamic>?> get bluetoothScanResults => _bleController.stream;
+
+  StreamSubscription? _bleSubscription;
+
+  void initBleStream() {
+    _bleSubscription ??= _bleEventChannel
+        .receiveBroadcastStream()
+        .listen((event) {
+      try {
+        final List<dynamic> rawList = event as List;
+        for(var entry in rawList){
+          final map = Map<String, dynamic>.from(entry);
+          _bleController.add(map);
+          return;
         }
-      }).handleError((error) {
-        print('Stream error: $error');
-      }).asBroadcastStream();
+      } catch (e) {
+        print('Error processing rawBluetoothScanResults scan result: $e');
+        return; // or rethrow based on your needs
+      }
+    }, onError: (error) {
+      print('gpsStreamRaw error: $error');
+    });
+  }
 
   final _gpsController = StreamController<Map<String, dynamic>?>.broadcast();
 
