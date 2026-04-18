@@ -39,6 +39,7 @@ class LocalizationEngine{
   }
 
   Future<void> init({required String venueName}) async {
+    print("init called of localization");
     await _startScanning(venueName: venueName);
     _getCurrentLocation(venueName: venueName);
     _trackUserLocation(venueName: venueName);
@@ -122,7 +123,7 @@ class LocalizationEngine{
         return; // or rethrow based on your needs
       }
     }, onError: (error) {
-      print('gpsStreamRaw error: $error');
+      print('bleStream error: $error');
     });
   }
 
@@ -195,6 +196,8 @@ class LocalizationEngine{
             longitude: gpsBufferLocation[1],
           );
         }
+
+        print("adding userLocation in collect&emit");
 
         _userLocation.add(LocalizationEngineLocation(
           beaconLocation: beaconLocation,
@@ -313,6 +316,7 @@ class LocalizationEngine{
     wsService.connect();
 
     _userLocation.stream.listen((data){
+      print("recieved data in _trackUserLocation");
       BeaconPointLocation? beaconLocation = data.beaconLocation;
       GPSLocation? gpsLocation = data.gpsLocation;
       if(gpsLocation == null && beaconLocation == null) return;

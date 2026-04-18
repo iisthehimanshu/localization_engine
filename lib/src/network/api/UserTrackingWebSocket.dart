@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:localization_engine/src/config/config.dart';
+import 'package:localization_engine/src/network/api/tracking_queue.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 
 // ─────────────────────────────────────────────
@@ -61,8 +62,9 @@ class WebSocketService {
 
   /// Register all socket event listeners
   void _registerEventListeners() {
-    _socket!.onConnect((_) {
+    _socket!.onConnect((_) async {
       _isConnected = true;
+      await flushTrackingQueue();
       print('[WebSocket] ✅ Connected to ${AppConfig.baseUrl}');
     });
 
@@ -93,14 +95,34 @@ class WebSocketService {
     });
   }
 
+  Future<void> flushTrackingQueue() async {
+    final events = await TrackingQueue.getAll();
+
+    for (final event in events) {
+      _socket?.emit(_eventName, event);
+    }
+
+    if (events.isNotEmpty) {
+      print('[WebSocket] 🚀 Flushed ${events.length} queued events');
+      await TrackingQueue.clear();
+    }
+  }
+
   /// Manually emit the tracking event with a [TrackingPayload]
-  void sendTracking(TrackingPayload payload) {
+  void sendTracking(TrackingPayload payload) async {
+    final json = payload.toJson();
+
     if (_socket == null || !_isConnected) {
-      print('[WebSocket] ⚠️ Cannot send — not connected.');
+      try{
+        connect();
+      }catch(e){
+        print("error reconnecting to socket $e");
+      }
+      print('[WebSocket] ⚠️ Not connected. Storing event.');
+      await TrackingQueue.add(json);
       return;
     }
 
-    final json = payload.toJson();
     _socket!.emit(_eventName, json);
     print('[WebSocket] 📤 Emitted "$_eventName": ${jsonEncode(json)}');
   }
