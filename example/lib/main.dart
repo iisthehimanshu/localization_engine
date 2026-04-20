@@ -20,7 +20,7 @@ class MyApp extends StatefulWidget {
 class _MyAppState extends State<MyApp> {
   final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
 
-  LocationTracker locationTracker = LocationTracker("NationalZoologicalPark");
+  LocationTracker locationTracker = LocationTracker("TestLocation");
 
   @override
   Widget build(BuildContext context) {
@@ -52,18 +52,30 @@ class _MyAppState extends State<MyApp> {
                 icon: const Icon(Icons.my_location),
               ),
               const SizedBox(height: 12),
-              IconButton(
+              ElevatedButton(
                 onPressed: (){
                   locationTracker.startTracking();
                 },
-                icon: const Icon(Icons.location_on),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.start),
+                    Text("Start Scanning for saving Data"),
+                  ],
+                ),
               ),
               const SizedBox(height: 12),
-              IconButton(
+              ElevatedButton(
                 onPressed: (){
                   locationTracker.saveBleDataToCsv();
                 },
-                icon: const Icon(Icons.file_copy),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.file_copy),
+                  Text("Stop Scanning and Save Data")
+                ],
+              ),
               ),
             ],
           ),

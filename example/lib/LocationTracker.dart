@@ -25,8 +25,11 @@ class LocationTracker {
   StreamSubscription? userLocationSubscription;
 
   void startTracking(){
-    userLocationSubscription = newLocalizationEngine.userLocation.listen((data){
-      bleDataList.add(data);
+    userLocationSubscription = newLocalizationEngine.bluetoothScanResults.listen((data){
+      print("locationTracking $data");
+      if(data != null){
+        bleDataList.add(data);
+      }
     });
   }
 
