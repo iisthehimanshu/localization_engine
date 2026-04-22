@@ -32,6 +32,9 @@ class LocalizationEngine{
 
   final _userLocation = StreamController<LocalizationEngineLocation>.broadcast();
   Stream<Map<String, dynamic>> get userLocation => _userLocation.stream.map((location) => location.toJson());
+  StreamSubscription<LocalizationEngineLocation>? _trackingSubscription;
+  Future<void>? _locationLoopTask;
+  int _runId = 0;
 
   LocalizationEngine(String venueName, {String? baseURL}){
     AppConfig.url = baseURL;
@@ -40,17 +43,18 @@ class LocalizationEngine{
 
   Future<void> init({required String venueName}) async {
     print("init called of localization");
+    _runId++;
     await _startScanning(venueName: venueName);
-    _getCurrentLocation(venueName: venueName);
+    _locationLoopTask = _getCurrentLocation(venueName: venueName, runId: _runId);
     _trackUserLocation(venueName: venueName);
   }
 
   Future<void> restart({required String venueName}) async {
-    // Stop any active scanning first
-    if (_isScanning) {
-      await _stopScanning();
-    }
-    _userLocation.close();
+    // Invalidate in-flight loops/listeners and stop active scanning first.
+    _runId++;
+    await _stopScanning();
+    await _trackingSubscription?.cancel();
+    _trackingSubscription = null;
 
     // Reset internal state
     _localization = null;
@@ -88,7 +92,7 @@ class LocalizationEngine{
       initGpsStream();
       initBleStream();
       _isScanning = true;
-    }else if(adapterState['PermanentlyDenied']){
+    }else if(adapterState['PermanentlyDenied'] || adapterState['errors'].first.contains("permission denied")){
       throw PermissionException(adapterState['errors'].first);
     }else{
       throw AdapterException(adapterState['errors'].first);
@@ -98,6 +102,10 @@ class LocalizationEngine{
   Future<void> _stopScanning() async {
     await _methodChannel.invokeMethod('stopScan');
     await _methodChannel.invokeMethod('stopGpsScan');
+    await _bleSubscription?.cancel();
+    _bleSubscription = null;
+    await _gpsSubscription?.cancel();
+    _gpsSubscription = null;
     _isScanning = false;
   }
 
@@ -139,6 +147,7 @@ class LocalizationEngine{
         .listen((event) {
       try {
         final map = Map<String, dynamic>.from(event as Map);
+        print("_gpsController $map");
         _gpsController.add(map);
       } catch (e) {
         print('gpsStreamRaw error: $e');
@@ -151,6 +160,7 @@ class LocalizationEngine{
 
   Future<void> _getCurrentLocation({
     required String venueName,
+    required int runId,
   }) async {
     BeaconPointLocation? beaconLocation;
     GPSLocation? gpsLocation;
@@ -228,7 +238,7 @@ class LocalizationEngine{
       } catch (_) {}
     }
 
-      while (true) {
+      while (_isScanning && runId == _runId) {
       try{
         await collectAndEmit();
       }catch(e){
@@ -236,6 +246,9 @@ class LocalizationEngine{
       }
 
       }
+
+      await bleSubscription.cancel();
+      await gpsSubscription.cancel();
   }
 
   Map<String, List<MapEntry<DateTime, int>>> groupByDevice(
@@ -315,7 +328,8 @@ class LocalizationEngine{
     print("_trackUserLocation $deviceId");
     wsService.connect();
 
-    _userLocation.stream.listen((data){
+    await _trackingSubscription?.cancel();
+    _trackingSubscription = _userLocation.stream.listen((data){
       print("recieved data in _trackUserLocation");
       BeaconPointLocation? beaconLocation = data.beaconLocation;
       GPSLocation? gpsLocation = data.gpsLocation;
