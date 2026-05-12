@@ -20,7 +20,10 @@ class InitialLocalization{
     return DirectionalLocalisation().estimateIntersectionCenter(beaconData, _apibeaconmap, compassDirection??0.0);
   }
 
-  Beacon? getBeaconDetails(String beaconName){
+  Beacon? getBeaconDetails(String beaconName, {Map<String, dynamic>? apiBeaconMap}){
+    if(apiBeaconMap != null){
+      return apiBeaconMap[beaconName];
+    }
     Beacon? beacon = _apibeaconmap[beaconName];
     return beacon;
   }

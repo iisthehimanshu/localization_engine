@@ -24,6 +24,18 @@ import 'dart:math';
 //  │   Closed-form trilateration gives an exact answer directly.         │
 //  └─────────────────────────────────────────────────────────────────────┘
 //
+//  4-BEACON MULTI-TRIANGULATION
+//  When exactly 4 beacons are supplied the solver runs three overlapping
+//  batches of 3 beacons each:
+//    Batch 1 → beacons [0, 1, 2]
+//    Batch 2 → beacons [1, 2, 3]
+//    Batch 3 → beacons [2, 3, 0]
+//  Each batch produces a TriangulationResult via the normal 3-beacon solver.
+//  The three estimated positions are then combined into a single resultant
+//  using accuracy-weighted averaging: better-accuracy results pull the final
+//  estimate closer to themselves.  The combined result is returned as a
+//  FourBeaconTriangulationResult which also exposes the three batch results.
+//
 //  UNIT MISMATCH WARNING
 //  rssiToDistance() returns metres by default.
 //  If your x/y coordinates are in feet, pass distanceScale = 3.28084.
@@ -93,6 +105,47 @@ class TriangulationResult {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// 4-Beacon result type
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Result returned when exactly 4 beacons are supplied.
+///
+/// [batchResults] holds the three individual 3-beacon estimates:
+///   index 0 → batch (B0, B1, B2)
+///   index 1 → batch (B1, B2, B3)
+///   index 2 → batch (B2, B3, B0)
+///
+/// [estimatedPosition] is the accuracy-weighted centroid of those three
+/// estimates — a better-quality batch pulls the final point closer to it.
+class FourBeaconTriangulationResult {
+  final Point2D estimatedPosition;
+  final List<TriangulationResult> batchResults;
+  final double? accuracy;
+
+  const FourBeaconTriangulationResult({
+    required this.estimatedPosition,
+    required this.batchResults,
+    this.accuracy,
+  });
+
+  @override
+  String toString() {
+    final sb = StringBuffer();
+    sb.writeln('FourBeaconTriangulationResult(');
+    sb.writeln('  final position  : $estimatedPosition');
+    sb.writeln('  est. accuracy   : ${accuracy != null ? "${accuracy!.toStringAsFixed(2)} local units" : "n/a"}');
+    for (int i = 0; i < batchResults.length; i++) {
+      sb.writeln('  ── Batch ${i + 1} ──────────────────────────────────────');
+      for (final line in batchResults[i].toString().split('\n')) {
+        sb.writeln('  $line');
+      }
+    }
+    sb.write(')');
+    return sb.toString();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // RSSI → distance
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -111,8 +164,8 @@ class TriangulationResult {
 /// [pathLossExponent] – n: 2.0 free-space … 4.0 heavy walls.
 double rssiToDistance(
     double rssi, {
-      double txPower = -59.0,
-      double pathLossExponent = 2.0,
+      double txPower = -70.0,
+      double pathLossExponent = 3.0,
       double distanceScale = 1.0,
     }) {
   if (rssi >= 0) return 0.0;
@@ -213,17 +266,6 @@ double? _inflationScale(
 
 /// Finds the point P that minimises  Σᵢ (‖P − cᵢ‖ − rᵢ)²
 /// via gradient descent with an adaptive step size and gradient clipping.
-///
-/// ### Why these two fixes prevent NaN
-/// **Adaptive base LR** (`min(radii) * 0.1`): a fixed LR of 2.0 is way too
-/// large when radii are small (e.g. 9 ft).  The raw gradient magnitude grows
-/// inversely with radius, so the position explodes to ±Inf in a few steps.
-/// Tying the LR to the smallest radius keeps the update proportionate to the
-/// problem scale regardless of what unit system or txPower you use.
-///
-/// **Gradient clipping** (normalise to unit vector): caps the step to exactly
-/// `baseLr` on the first few chaotic iterations before convergence.  Once the
-/// gradient is naturally small the clip has no effect.
 Point2D _leastSquares(
     List<Point2D> centres,
     List<double> radii, {
@@ -250,20 +292,19 @@ Point2D _leastSquares(
       final dy = py - centres[i].y;
       final dist = sqrt(dx * dx + dy * dy);
       if (dist < 1e-9) continue;
-      final err = dist - radii[i]; // + = too far from beacon, − = too close
+      final err = dist - radii[i];
       gx += err * dx / dist;
       gy += err * dy / dist;
     }
 
-    // Gradient clipping: if the raw gradient is large, normalise to unit
-    // length so each step is at most baseLr — prevents exploding updates.
+    // Gradient clipping
     final gMag = sqrt(gx * gx + gy * gy);
     if (gMag > 1.0) {
       gx /= gMag;
       gy /= gMag;
     }
 
-    // Decaying LR: big steps early for speed, tiny steps later for precision
+    // Decaying LR
     final lr = baseLr / (1.0 + iter * 0.001);
     px -= lr * gx;
     py -= lr * gy;
@@ -304,8 +345,6 @@ Point2D? _trilaterate3(
 // Bounding-box sanity check
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Returns true if [p] lies within [margin] local units of the beacon
-/// bounding box — a quick plausibility test for closed-form results.
 bool _isInsideBoundingBox(
     Point2D p,
     List<Point2D> beaconPositions, {
@@ -319,7 +358,6 @@ bool _isInsideBoundingBox(
     if (b.y < minY) minY = b.y;
     if (b.y > maxY) maxY = b.y;
   }
-  // Expand by the largest circle radius as a generous margin
   final span = sqrt((maxX - minX) * (maxX - minX) + (maxY - minY) * (maxY - minY));
   final expand = span * margin;
   return p.x >= minX - expand &&
@@ -357,7 +395,6 @@ TriangulationResult _twoBeacon(Beacon b1, double d1, Beacon b2, double d2) {
   final centres = [b1.location, b2.location];
   final radii   = [d1, d2];
 
-  // Try intersection first
   final intersections = _circleIntersections(b1.location, d1, b2.location, d2);
 
   if (intersections != null && intersections.isNotEmpty) {
@@ -378,7 +415,6 @@ TriangulationResult _twoBeacon(Beacon b1, double d1, Beacon b2, double d2) {
     );
   }
 
-  // Circles don't intersect — inflate then least-squares
   final scale = _inflationScale(centres, radii);
   if (scale != null && scale > 1.0) {
     final inflated = [d1 * scale, d2 * scale];
@@ -394,7 +430,6 @@ TriangulationResult _twoBeacon(Beacon b1, double d1, Beacon b2, double d2) {
     }
   }
 
-  // Absolute fallback: least-squares
   final ls = _leastSquares(centres, radii);
   return TriangulationResult(
     estimatedPosition: ls,
@@ -411,7 +446,6 @@ TriangulationResult _threeBeacon(
     ) {
   final centres  = [b1.location, b2.location, b3.location];
   final radii    = [d1, d2, d3];
-  final beacons  = [b1, b2, b3];
 
   // ── Step 1: try exact closed-form ────────────────────────────────────
   final cf = _trilaterate3(b1.location, d1, b2.location, d2, b3.location, d3);
@@ -438,7 +472,7 @@ TriangulationResult _threeBeacon(
       if (cfInflated != null && _isInsideBoundingBox(cfInflated, centres)) {
         return TriangulationResult(
           estimatedPosition: cfInflated,
-          distances: radii, // report original distances, not inflated
+          distances: radii,
           method:
           'three-beacon (circle inflation ×${scale.toStringAsFixed(2)} → trilateration)',
           accuracy: _avgResidual(cfInflated, centres, radii),
@@ -447,7 +481,7 @@ TriangulationResult _threeBeacon(
     }
   }
 
-  // ── Step 3: circles overlap but outside triangle → least-squares ─────
+  // ── Step 3: least-squares fallback ───────────────────────────────────
   final ls = _leastSquares(centres, radii);
   String method;
   if (cf == null) {
@@ -467,19 +501,92 @@ TriangulationResult _threeBeacon(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// 4-Beacon multi-triangulation
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Runs three overlapping 3-beacon batches and combines the results into a
+/// single accuracy-weighted position estimate.
+///
+/// Given beacons sorted by signal strength [B0, B1, B2, B3]:
+///   Batch 1 → (B0, B1, B2)
+///   Batch 2 → (B1, B2, B3)
+///   Batch 3 → (B2, B3, B0)
+///
+/// Each batch produces its own [TriangulationResult] via the normal
+/// 3-beacon solver.  The final position is the **accuracy-weighted centroid**
+/// of the three estimates:
+///
+///   weight_i = 1 / (accuracy_i + ε)    ← lower error = higher weight
+///   x_final  = Σ(weight_i · x_i) / Σ weight_i
+///   y_final  = Σ(weight_i · y_i) / Σ weight_i
+///
+/// This means a batch whose circles intersect cleanly (small residual)
+/// pulls the final answer toward itself more than a noisy batch.
+FourBeaconTriangulationResult _fourBeacon(
+    List<Beacon> top4,
+    List<double> distances,
+    ) {
+  assert(top4.length == 4 && distances.length == 4);
+
+  // Define the three index triplets: (0,1,2), (1,2,3), (2,3,0)
+  final triplets = [
+    [0, 1, 2],
+    [1, 2, 3],
+    [2, 3, 0],
+  ];
+
+  final batchResults = <TriangulationResult>[];
+
+  for (final t in triplets) {
+    final result = _threeBeacon(
+      top4[t[0]], distances[t[0]],
+      top4[t[1]], distances[t[1]],
+      top4[t[2]], distances[t[2]],
+    );
+    batchResults.add(result);
+  }
+
+  // Accuracy-weighted centroid of the three batch estimates.
+  // If a batch has null accuracy we assign a generous fallback penalty so it
+  // still contributes but with lower weight than a well-solved batch.
+  const fallbackAccuracy = 1e6;
+  final weights = batchResults
+      .map((r) => 1.0 / ((r.accuracy ?? fallbackAccuracy) + 1e-9))
+      .toList();
+  final totalW = weights.fold(0.0, (s, w) => s + w);
+
+  double wx = 0, wy = 0;
+  for (int i = 0; i < batchResults.length; i++) {
+    wx += weights[i] * batchResults[i].estimatedPosition.x;
+    wy += weights[i] * batchResults[i].estimatedPosition.y;
+  }
+  final combined = Point2D(wx / totalW, wy / totalW);
+
+  // All four centres for the residual calculation
+  final allCentres = top4.map((b) => b.location).toList();
+  final combinedAccuracy = _avgResidual(combined, allCentres, distances);
+
+  return FourBeaconTriangulationResult(
+    estimatedPosition: combined,
+    batchResults: batchResults,
+    accuracy: combinedAccuracy,
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Public API
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Estimates the observer's 2-D position from 1, 2, or 3 BLE beacons.
+/// Estimates the observer's 2-D position from 1, 2, 3, or 4 BLE beacons.
 ///
-/// The solver automatically selects the best strategy:
-///   • Exact trilateration     — when circles intersect inside the beacon area.
-///   • Circle inflation        — when circles are too small (non-intersecting):
-///                               inflates all radii proportionally until they
-///                               just overlap, then trilaterates.
-///   • Least-squares descent   — when circles overlap outside the beacon area
-///                               (noisy RSSI): finds the point that minimises
-///                               Σ(distance − radius)² — always finite.
+/// • **1 beacon** → proximity (position = beacon location, accuracy = radius).
+/// • **2 beacons** → circle intersection or least-squares.
+/// • **3 beacons** → closed-form trilateration, circle inflation, or
+///                   least-squares (whichever suits the geometry).
+/// • **4 beacons** → multi-triangulation: three overlapping 3-beacon batches
+///                   whose results are combined via accuracy-weighted averaging.
+///                   Returns a [FourBeaconTriangulationResult].
+/// • **5+ beacons** → the 4 with the strongest signal are used (4-beacon path).
 ///
 /// ### `distanceScale` — the most important parameter to get right
 /// `rssiToDistance` outputs **metres**.  Your x/y coordinates may use a
@@ -491,25 +598,28 @@ TriangulationResult _threeBeacon(
 ///   Custom → distanceScale = (local units) / (1 metre)
 ///
 /// ### Other parameters
-///   [txPower]           – calibrated RSSI at 1 m (dBm, default −59).
+///   [txPower]           – calibrated RSSI at 1 m (dBm, default −70).
 ///   [pathLossExponent]  – n: 2.0 free-space … 4.0 heavy walls.
 ///
-/// If more than 3 beacons are supplied the 3 with the strongest signal are used.
-TriangulationResult triangulate(
+/// The return type is [TriangulationResult] for 1–3 beacons and
+/// [FourBeaconTriangulationResult] (a subtype) for 4+ beacons.
+dynamic triangulate(
     List<Beacon> beacons, {
-      double txPower = -59.0,
-      double pathLossExponent = 2.0,
-      double distanceScale = 1.0,
+      double txPower = -70.0,
+      double pathLossExponent = 3.0,
+      double distanceScale = 3.28084,
     }) {
   if (beacons.isEmpty) throw ArgumentError('At least one beacon is required.');
 
-  // Sort by strongest signal first (least-negative = closest)
+  // Sort by strongest signal first (least-negative RSSI = closest beacon)
   final sorted = [...beacons]..sort((a, b) => b.rssi.compareTo(a.rssi));
-  if (sorted.length > 3) {
+
+  if (sorted.length > 4) {
     print('[triangulate] ${sorted.length} beacons supplied; '
-        'using the 3 strongest.');
+        'using the 4 strongest.');
   }
-  final top = sorted.take(3).toList();
+
+  final top = sorted.take(4).toList();
 
   final distances = top
       .map((b) => rssiToDistance(
@@ -525,24 +635,51 @@ TriangulationResult triangulate(
       return _singleBeacon(top[0], distances[0]);
     case 2:
       return _twoBeacon(top[0], distances[0], top[1], distances[1]);
-    default:
+    case 3:
       return _threeBeacon(
         top[0], distances[0],
         top[1], distances[1],
         top[2], distances[2],
       );
+    default: // 4 beacons
+      return _fourBeacon(top, distances);
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Demo
+// ─────────────────────────────────────────────────────────────────────────
+
 void main() {
   print('══════════════════════════════════════════════════════════════');
-  print('                  BEACON TRIANGULATION DEMO');
+  print('            BEACON TRIANGULATION DEMO  (1–4 beacons)');
   print('══════════════════════════════════════════════════════════════\n');
 
-  final beaconsIndoor = [
-    Beacon(id: 'A', location: const Point2D(19, 32),  rssi: -96.66666666666667),
+  // ── 3-beacon scenario (unchanged behaviour) ──────────────────────────
+  print('─── 3-beacon scenario ───────────────────────────────────────');
+  final beacons3 = [
+    Beacon(id: 'A', location: const Point2D(19, 32), rssi: -96.66666666666667),
     Beacon(id: 'B', location: const Point2D(64, 32), rssi: -88.25),
-    Beacon(id: 'C', location: const Point2D(94, 25),  rssi: -94.0),
+    Beacon(id: 'C', location: const Point2D(94, 25), rssi: -94.0),
   ];
-  print(triangulate(beaconsIndoor, txPower: -75.0, pathLossExponent: 3.0, distanceScale: 3.28084));
+  print(triangulate(beacons3, txPower: -75.0, pathLossExponent: 3.0, distanceScale: 3.28084));
+
+  print('');
+
+  // ── 4-beacon scenario ────────────────────────────────────────────────
+  print('─── 4-beacon scenario ───────────────────────────────────────');
+  final beacons4 = [
+    Beacon(id: 'A', location: const Point2D(19, 32),  rssi: -96.66666666666667),
+    Beacon(id: 'B', location: const Point2D(64, 32),  rssi: -88.25),
+    Beacon(id: 'C', location: const Point2D(94, 25),  rssi: -94.0),
+    Beacon(id: 'D', location: const Point2D(50, 10),  rssi: -91.0),
+  ];
+  final result4 = triangulate(
+    beacons4,
+    txPower: -75.0,
+    pathLossExponent: 3.0,
+    distanceScale: 3.28084,
+  ) as FourBeaconTriangulationResult;
+
+  print(result4);
 }

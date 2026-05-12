@@ -5,7 +5,7 @@ import '../model/beaconData.dart';
 
 
 class Localizationusingmlmodelapi {
-  final String baseUrl = "http://10.194.174.248:8080/navigation/localize";
+  final String baseUrl = "http://192.168.1.66:8080/navigation/localize";
 
   Future<dynamic> localize(Map<String, double> values) async {
 

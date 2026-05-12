@@ -46,7 +46,7 @@ class LocalizationEngine{
     _runId++;
     await _startScanning(venueName: venueName);
     _locationLoopTask = _getCurrentLocation(venueName: venueName, runId: _runId);
-    _trackUserLocation(venueName: venueName);
+    // _trackUserLocation(venueName: venueName);
   }
 
   Future<void> restart({required String venueName}) async {
@@ -181,7 +181,7 @@ class LocalizationEngine{
 
     Future<void> collectAndEmit() async {
       // Wait for data to accumulate
-      await Future.delayed(const Duration(seconds: 3));
+      await Future.delayed(const Duration(seconds: 10));
 
       // Snapshot and clear buffers atomically for this window
       final bleBatch = List<Map<String, dynamic>>.from(bleData);
@@ -194,7 +194,7 @@ class LocalizationEngine{
         final filteredData = _localization?.filterBeacons(scanData) ?? scanData;
 
         final resolver = NearestBeaconResolver(_localization!);
-        beaconLocation = resolver.resolve(filteredData);
+        beaconLocation = await resolver.resolve(filteredData);
 
         for (var data in gpsBatch) {
           _gpsBuffer.add(data['latitude'], data['longitude']);

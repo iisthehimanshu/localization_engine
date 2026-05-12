@@ -36,6 +36,7 @@ class BeaconPointLocation {
   final int floor;
   final double latitude, longitude;
   final List<String> beacons;
+  int? tempX, tempY;
 
   BeaconPointLocation({
     required this.x,

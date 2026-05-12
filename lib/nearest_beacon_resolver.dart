@@ -1,6 +1,8 @@
-import 'dart:developer';
+import 'dart:developer' as dev;
+import 'dart:math';
 import 'package:localization_engine/location.dart';
 import 'package:localization_engine/src/localizationAlgorithm/_triangulationlLocalisation.dart';
+import 'package:localization_engine/src/network/api/localizationUsingMLModelapi.dart';
 import 'package:localization_engine/src/statisticalMode.dart';
 import 'initialLocalization.dart';
 
@@ -11,9 +13,10 @@ class NearestBeaconResolver {
   const NearestBeaconResolver(this.localization);
 
   /// Returns a [BeaconPointLocation] for the strongest beacon, or null.
-  BeaconPointLocation? resolve(
+  Future<BeaconPointLocation?> resolve(
       Map<String, List<MapEntry<DateTime, int>>> data,
-      ) {
+  {Map<String, dynamic>? apiBeaconMap, List<int>? gt}
+      ) async {
 
     int? bestFloor;
 
@@ -31,10 +34,12 @@ class NearestBeaconResolver {
     double bestAvg = 90; // targeting good beacons only having rssi better than -90
 
     var modeValues = filterByBinsAndAverage(data);
+    // print("data $data");
+    // print("modeValues $modeValues");
 
     data.forEach((beaconId, entries) {
       if (entries.isEmpty) return;
-      var beacon = localization.getBeaconDetails(beaconId);
+      var beacon = localization.getBeaconDetails(beaconId, apiBeaconMap: apiBeaconMap);
       if(bestFloor != null && beacon != null && beacon.floor != bestFloor) return;
       final avg = modeValues[beaconId] ?? entries.map((e) => e.value).reduce((a, b) => a + b) / entries.length;
       final absAvg = avg.abs();
@@ -45,10 +50,10 @@ class NearestBeaconResolver {
       }
     });
 
-    log('nearestBeacon: $bestBeacon @ $bestAvg');
+    dev.log('nearestBeacon: $bestBeacon @ $bestAvg');
 
     if (bestBeacon != null){
-      final beacon = localization.getBeaconDetails(bestBeacon!);
+      final beacon = localization.getBeaconDetails(bestBeacon!, apiBeaconMap: apiBeaconMap);
       if (beacon == null) return null;
 
       return BeaconPointLocation(
@@ -63,8 +68,15 @@ class NearestBeaconResolver {
     }else{
 
       // Sort by nearest (highest RSSI assumed better)
-      final sorted = modeValues.entries.toList()
+      var sorted = modeValues.entries.toList()
         ..sort((a, b) => b.value.compareTo(a.value));
+
+      sorted = sorted.where((s) {
+        return localization.getBeaconDetails(
+          s.key,
+          apiBeaconMap: apiBeaconMap,
+        ) != null;
+      }).toList();
 
       if (sorted.length < 3) {
         return null;
@@ -74,27 +86,32 @@ class NearestBeaconResolver {
 
       if (bestFloor != null) {
         final filtered = sorted.where((s) {
-          final beacon = localization.getBeaconDetails(s.key);
+          final beacon = localization.getBeaconDetails(s.key, apiBeaconMap: apiBeaconMap);
           return beacon != null && beacon.floor == bestFloor;
         }).toList();
 
         // fallback if less than 3 on that floor
-        if (filtered.length >= 3) {
-          top3 = filtered.take(3).toList();
+        if (filtered.length >= 4) {
+          top3 = selectDiverseBeacons(filtered, apiBeaconMap??localization.apibeaconmap, localization, count: 3, alpha: 0.2);
         } else {
-          top3 = sorted.take(3).toList(); // fallback to global top 3
+          top3 = selectDiverseBeacons(sorted, apiBeaconMap??localization.apibeaconmap, localization, count: 3, alpha: 0.2);
         }
       } else {
-        top3 = sorted.take(3).toList();
+        top3 = selectDiverseBeacons(sorted, apiBeaconMap??localization.apibeaconmap, localization, count: 3, alpha: 0.2);
       }
 
+      String modelResponse = await Localizationusingmlmodelapi().localize(Map.fromEntries(top3));
+      final parts = modelResponse.split(',');
 
-      log("Top 3 beacons: $top3");
-      var topBeacon = localization.getBeaconDetails(top3.first.key);
+      int x = int.parse(parts[1]);
+      int y = int.parse(parts[2]);
+
+      dev.log("Top 3 beacons: $top3");
+      var topBeacon = localization.getBeaconDetails(top3.first.key, apiBeaconMap: apiBeaconMap);
 
       var list = top3.map((b)
       {
-        var beaconDetails = localization.getBeaconDetails(b.key);
+        var beaconDetails = localization.getBeaconDetails(b.key, apiBeaconMap: apiBeaconMap);
         return Beacon(id: b.key, location: Point2D(beaconDetails!.coordinateX!.toDouble(), beaconDetails.coordinateY!.toDouble()), rssi: b.value);
       }).toList();
 
@@ -102,10 +119,90 @@ class NearestBeaconResolver {
         print("beacon ${item.toString()}");
       });
 
-      TriangulationResult triangulationResult = triangulate(list);
-      print(" triangulationResult.estimatedPosition.x ${ triangulationResult.estimatedPosition.x}");
-      return BeaconPointLocation(x: triangulationResult.estimatedPosition.x.toInt(), y: triangulationResult.estimatedPosition.y.toInt(), bid: topBeacon!.buildingID!, floor: topBeacon.floor!, latitude: double.parse(topBeacon.properties!.latitude!), longitude: double.parse(topBeacon.properties!.longitude!), beacons: top3.map((b)=>b.key).toList());
+      dynamic triangulationResult = triangulate(list, distanceScale: 3.28084);
+      print(" triangulationResult.estimatedPosition ${ triangulationResult.estimatedPosition.x},${triangulationResult.estimatedPosition.y}");
+      return BeaconPointLocation(x: x, y: y, bid: topBeacon!.buildingID!, floor: topBeacon.floor!, latitude: double.parse(topBeacon.properties!.latitude!), longitude: double.parse(topBeacon.properties!.longitude!), beacons: top3.map((b)=>b.key).toList())
+        ..tempX = triangulationResult.estimatedPosition.x.toInt()
+          ..tempY = triangulationResult.estimatedPosition.y.toInt();
     }
+  }
+
+  /// Selects [count] beacons balancing RSSI strength and geometric spread.
+  /// [alpha] = 0.0 → pure geometry, 1.0 → pure RSSI. Try 0.4–0.6.
+  List<MapEntry<String, double>> selectDiverseBeacons(
+      List<MapEntry<String, double>> candidates,
+      Map<String, dynamic> apiBeaconMap,
+      InitialLocalization localization, {
+        int count = 3,
+        double alpha = 0.5,
+      }) {
+    if (candidates.length <= count) return candidates;
+
+    final positions = <String, Point2D>{};
+    for (final c in candidates) {
+      final details = localization.getBeaconDetails(c.key, apiBeaconMap: apiBeaconMap);
+      if (details != null) {
+        positions[c.key] = Point2D(
+          details.coordinateX!.toDouble(),
+          details.coordinateY!.toDouble(),
+        );
+      }
+    }
+
+    final rssiValues = candidates.map((c) => c.value).toList();
+    final rssiMin = rssiValues.reduce(min);
+    final rssiMax = rssiValues.reduce(max);
+    final rssiRange = (rssiMax - rssiMin).abs();
+
+    double normalizedRssi(String key) {
+      if (rssiRange < 1e-9) return 1.0;
+      final val = candidates.firstWhere((c) => c.key == key).value;
+      return (val - rssiMin) / rssiRange;
+    }
+
+    final selected = <MapEntry<String, double>>[];
+    final remaining = List<MapEntry<String, double>>.from(candidates);
+
+    // Always seed with the strongest beacon
+    selected.add(remaining.removeAt(0));
+
+    while (selected.length < count && remaining.isNotEmpty) {
+      // Compute each remaining candidate's min distance to any selected beacon
+      final minDists = remaining.map((c) {
+        final candPos = positions[c.key];
+        if (candPos == null) return 0.0;
+        double minD = double.infinity;
+        for (final sel in selected) {
+          final selPos = positions[sel.key];
+          if (selPos == null) continue;
+          final d = sqrt(pow(candPos.x - selPos.x, 2) + pow(candPos.y - selPos.y, 2));
+          if (d < minD) minD = d;
+        }
+        return minD;
+      }).toList();
+
+      // Normalize distances to [0, 1] for this round
+      final distMin = minDists.reduce(min);
+      final distMax = minDists.reduce(max);
+      final distRange = (distMax - distMin).abs();
+
+      double bestScore = -1;
+      int bestIdx = 0;
+
+      for (int i = 0; i < remaining.length; i++) {
+        final normRssi = normalizedRssi(remaining[i].key);
+        final normDist = distRange < 1e-9 ? 1.0 : (minDists[i] - distMin) / distRange;
+        final score = alpha * normRssi + (1 - alpha) * (1 - normDist); // prefer closer beacons
+        if (score > bestScore) {
+          bestScore = score;
+          bestIdx = i;
+        }
+      }
+
+      selected.add(remaining.removeAt(bestIdx));
+    }
+
+    return selected;
   }
 
   int getBestFloor(List<dynamic> result) {

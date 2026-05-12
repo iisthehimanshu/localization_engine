@@ -12,8 +12,8 @@ class LocationTracker {
   String venueName;
   late LocalizationEngine newLocalizationEngine;
 
-  LocationTracker(this.venueName){
-    newLocalizationEngine = LocalizationEngine(venueName);
+  LocationTracker(this.venueName, {String? baseURL}){
+    newLocalizationEngine = LocalizationEngine(venueName, baseURL: baseURL);
   }
 
   Stream<Map<String, dynamic>?> get bluetoothScanResults => newLocalizationEngine.bluetoothScanResults;

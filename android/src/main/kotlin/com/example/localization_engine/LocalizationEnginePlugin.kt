@@ -103,8 +103,6 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             ?: result.device.name
             ?: return
 
-        if (!deviceName.startsWith("IW", ignoreCase = true)) return
-
         val manufacturerData = result.scanRecord?.manufacturerSpecificData
         var manufacturerHex: String? = null
         manufacturerData?.let { data ->

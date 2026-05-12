@@ -20,7 +20,7 @@ class MyApp extends StatefulWidget {
 class _MyAppState extends State<MyApp> {
   final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
 
-  LocationTracker locationTracker = LocationTracker("TestLocation");
+  LocationTracker locationTracker = LocationTracker("IIT Delhi", baseURL: "https://dev.iwayplus.in");
 
   @override
   Widget build(BuildContext context) {
