@@ -8,6 +8,7 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:localization_engine/src/GPS/GPSBuffer.dart';
+import 'package:localization_engine/src/PeakValleyDetector.dart';
 import 'package:localization_engine/src/config/config.dart';
 import 'package:localization_engine/src/network/api/UserTrackingWebSocket.dart';
 
@@ -35,6 +36,7 @@ class LocalizationEngine{
   StreamSubscription<LocalizationEngineLocation>? _trackingSubscription;
   Future<void>? _locationLoopTask;
   int _runId = 0;
+  final detector = PeakValleyDetector(historySize: 4);
 
   LocalizationEngine(String venueName, {String? baseURL}){
     AppConfig.url = baseURL;
@@ -162,8 +164,6 @@ class LocalizationEngine{
     required String venueName,
     required int runId,
   }) async {
-    BeaconPointLocation? beaconLocation;
-    GPSLocation? gpsLocation;
 
     // Buffers shared across iterations
     final List<Map<String, dynamic>> bleData = [];
@@ -180,6 +180,8 @@ class LocalizationEngine{
     });
 
     Future<void> collectAndEmit() async {
+      BeaconPointLocation? beaconLocation;
+      GPSLocation? gpsLocation;
       // Wait for data to accumulate
       await Future.delayed(const Duration(seconds: 3));
 
@@ -195,6 +197,19 @@ class LocalizationEngine{
 
         final resolver = NearestBeaconResolver(_localization!);
         beaconLocation = resolver.resolve(filteredData);
+        for (var event in bleBatch) {
+          var result = detector.processEvent(event);
+          print("peakValley Result found $result");
+          if(result != null){
+            var beacon = _localization?.getBeaconDetails(result.name);
+            if(beacon != null){
+              print("peakValleyBeacon ${beacon.name}");
+              beaconLocation = BeaconPointLocation(x: beacon.coordinateX!, y: beacon.coordinateY!, bid: beacon.buildingID!, floor: beacon.floor!, latitude: double.parse(beacon.properties!.latitude!), longitude: double.parse(beacon.properties!.longitude!), beacons: [result.name]);
+            }else{
+              print("PeakValley result discarded for ${result.name}");
+            }
+          }
+        }
 
         for (var data in gpsBatch) {
           _gpsBuffer.add(data['latitude'], data['longitude']);
@@ -235,7 +250,9 @@ class LocalizationEngine{
         bleSubscription.cancel();
         gpsSubscription.cancel();
         rethrow;
-      } catch (_) {}
+      } catch (e) {
+        print("error in collect and emmit $e");
+      }
     }
 
       while (_isScanning && runId == _runId) {

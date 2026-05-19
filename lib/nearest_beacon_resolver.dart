@@ -28,7 +28,7 @@ class NearestBeaconResolver {
     }
 
     String? bestBeacon;
-    double bestAvg = 90; // targeting good beacons only having rssi better than -90
+    double bestAvg = 76; // targeting good beacons only having rssi better than -90
 
     var modeValues = filterByBinsAndAverage(data);
 
@@ -39,7 +39,7 @@ class NearestBeaconResolver {
       final avg = modeValues[beaconId] ?? entries.map((e) => e.value).reduce((a, b) => a + b) / entries.length;
       final absAvg = avg.abs();
 
-      if (absAvg < bestAvg) {
+      if (absAvg <= bestAvg) {
         bestAvg = absAvg;
         bestBeacon = beaconId;
       }
@@ -60,52 +60,55 @@ class NearestBeaconResolver {
         longitude: double.parse(beacon.properties!.longitude!),
         beacons: [bestBeacon!],
       );
-    }else{
-
-      // Sort by nearest (highest RSSI assumed better)
-      final sorted = modeValues.entries.toList()
-        ..sort((a, b) => b.value.compareTo(a.value));
-
-      if (sorted.length < 3) {
-        return null;
-      }
-
-      List<MapEntry<String, double>> top3;
-
-      if (bestFloor != null) {
-        final filtered = sorted.where((s) {
-          final beacon = localization.getBeaconDetails(s.key);
-          return beacon != null && beacon.floor == bestFloor;
-        }).toList();
-
-        // fallback if less than 3 on that floor
-        if (filtered.length >= 3) {
-          top3 = filtered.take(3).toList();
-        } else {
-          top3 = sorted.take(3).toList(); // fallback to global top 3
-        }
-      } else {
-        top3 = sorted.take(3).toList();
-      }
-
-
-      log("Top 3 beacons: $top3");
-      var topBeacon = localization.getBeaconDetails(top3.first.key);
-
-      var list = top3.map((b)
-      {
-        var beaconDetails = localization.getBeaconDetails(b.key);
-        return Beacon(id: b.key, location: Point2D(beaconDetails!.coordinateX!.toDouble(), beaconDetails.coordinateY!.toDouble()), rssi: b.value);
-      }).toList();
-
-      list.forEach((item){
-        print("beacon ${item.toString()}");
-      });
-
-      TriangulationResult triangulationResult = triangulate(list);
-      print(" triangulationResult.estimatedPosition.x ${ triangulationResult.estimatedPosition.x}");
-      return BeaconPointLocation(x: triangulationResult.estimatedPosition.x.toInt(), y: triangulationResult.estimatedPosition.y.toInt(), bid: topBeacon!.buildingID!, floor: topBeacon.floor!, latitude: double.parse(topBeacon.properties!.latitude!), longitude: double.parse(topBeacon.properties!.longitude!), beacons: top3.map((b)=>b.key).toList());
     }
+
+    return null;
+    // else{
+    //
+    //   // Sort by nearest (highest RSSI assumed better)
+    //   final sorted = modeValues.entries.toList()
+    //     ..sort((a, b) => b.value.compareTo(a.value));
+    //
+    //   if (sorted.length < 3) {
+    //     return null;
+    //   }
+    //
+    //   List<MapEntry<String, double>> top3;
+    //
+    //   if (bestFloor != null) {
+    //     final filtered = sorted.where((s) {
+    //       final beacon = localization.getBeaconDetails(s.key);
+    //       return beacon != null && beacon.floor == bestFloor;
+    //     }).toList();
+    //
+    //     // fallback if less than 3 on that floor
+    //     if (filtered.length >= 3) {
+    //       top3 = filtered.take(3).toList();
+    //     } else {
+    //       top3 = sorted.take(3).toList(); // fallback to global top 3
+    //     }
+    //   } else {
+    //     top3 = sorted.take(3).toList();
+    //   }
+    //
+    //
+    //   log("Top 3 beacons: $top3");
+    //   var topBeacon = localization.getBeaconDetails(top3.first.key);
+    //
+    //   var list = top3.map((b)
+    //   {
+    //     var beaconDetails = localization.getBeaconDetails(b.key);
+    //     return Beacon(id: b.key, location: Point2D(beaconDetails!.coordinateX!.toDouble(), beaconDetails.coordinateY!.toDouble()), rssi: b.value);
+    //   }).toList();
+    //
+    //   list.forEach((item){
+    //     print("beacon ${item.toString()}");
+    //   });
+    //
+    //   TriangulationResult triangulationResult = triangulate(list);
+    //   print(" triangulationResult.estimatedPosition.x ${ triangulationResult.estimatedPosition.x}");
+    //   return BeaconPointLocation(x: triangulationResult.estimatedPosition.x.toInt(), y: triangulationResult.estimatedPosition.y.toInt(), bid: topBeacon!.buildingID!, floor: topBeacon.floor!, latitude: double.parse(topBeacon.properties!.latitude!), longitude: double.parse(topBeacon.properties!.longitude!), beacons: top3.map((b)=>b.key).toList());
+    // }
   }
 
   int getBestFloor(List<dynamic> result) {
