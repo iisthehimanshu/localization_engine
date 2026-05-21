@@ -28,7 +28,7 @@ class NearestBeaconResolver {
     }
 
     String? bestBeacon;
-    double bestAvg = 76; // targeting good beacons only having rssi better than -90
+    double bestAvg = 85; // targeting good beacons only having rssi better than -90
 
     var modeValues = filterByBinsAndAverage(data);
 
@@ -59,6 +59,7 @@ class NearestBeaconResolver {
         latitude: double.parse(beacon.properties!.latitude!),
         longitude: double.parse(beacon.properties!.longitude!),
         beacons: [bestBeacon!],
+        rssi: bestAvg > 0 ? -bestAvg : bestAvg,
       );
     }
 

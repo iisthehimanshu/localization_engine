@@ -130,6 +130,7 @@ class PeakValleyDetector {
   final int historySize;
   DateTime? _flagTime;
 
+
   PeakValleyDetector({
     this.historySize = 10,
   });
@@ -182,7 +183,7 @@ class PeakValleyDetector {
 
       // Find the beacon with the highest peak
       String? bestBeacon;
-      int highestRssi = -72;
+      int highestRssi = -85;
 
       for (final entry in candidates.entries) {
         if (entry.value.rssi >= highestRssi) {

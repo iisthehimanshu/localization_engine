@@ -37,8 +37,10 @@ class LocalizationEngine{
   Future<void>? _locationLoopTask;
   int _runId = 0;
   final detector = PeakValleyDetector(historySize: 4);
+  static Map<String, Map<int, Map<String, dynamic>>>? floorConfig;
 
-  LocalizationEngine(String venueName, {String? baseURL}){
+  LocalizationEngine(String venueName, {String? baseURL, Map<String, Map<int, Map<String, dynamic>>>? floorConfig}){
+    LocalizationEngine.floorConfig = floorConfig;
     AppConfig.url = baseURL;
     init(venueName: venueName);
   }
@@ -197,14 +199,17 @@ class LocalizationEngine{
 
         final resolver = NearestBeaconResolver(_localization!);
         beaconLocation = resolver.resolve(filteredData);
+        if(beaconLocation != null && floorConfig?[beaconLocation.bid]?[beaconLocation.floor]?["initialLocalizationThreshold"] != null && floorConfig?[beaconLocation.bid]?[beaconLocation.floor]?["initialLocalizationThreshold"] < beaconLocation.rssi){
+          beaconLocation = null;
+        }
         for (var event in bleBatch) {
           var result = detector.processEvent(event);
           print("peakValley Result found $result");
           if(result != null){
             var beacon = _localization?.getBeaconDetails(result.name);
-            if(beacon != null){
+            if(beacon != null && (floorConfig?[beacon.buildingID]?[beacon.floor]?["peakValley"]??-75) < result.peakRssi){
               print("peakValleyBeacon ${beacon.name}");
-              beaconLocation = BeaconPointLocation(x: beacon.coordinateX!, y: beacon.coordinateY!, bid: beacon.buildingID!, floor: beacon.floor!, latitude: double.parse(beacon.properties!.latitude!), longitude: double.parse(beacon.properties!.longitude!), beacons: [result.name]);
+              beaconLocation = BeaconPointLocation(x: beacon.coordinateX!, y: beacon.coordinateY!, bid: beacon.buildingID!, floor: beacon.floor!, latitude: double.parse(beacon.properties!.latitude!), longitude: double.parse(beacon.properties!.longitude!), beacons: [result.name], rssi: result.peakRssi.toDouble());
             }else{
               print("PeakValley result discarded for ${result.name}");
             }

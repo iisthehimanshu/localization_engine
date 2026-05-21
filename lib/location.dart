@@ -36,6 +36,7 @@ class BeaconPointLocation {
   final int floor;
   final double latitude, longitude;
   final List<String> beacons;
+  final double? rssi;
 
   BeaconPointLocation({
     required this.x,
@@ -45,6 +46,7 @@ class BeaconPointLocation {
     required this.latitude,
     required this.longitude,
     required this.beacons,
+    required this.rssi,
   });
 
   factory BeaconPointLocation.fromJson(Map<String, dynamic> json) {
@@ -56,6 +58,7 @@ class BeaconPointLocation {
       latitude: (json['latitude'] as num).toDouble(),
       longitude: (json['longitude'] as num).toDouble(),
       beacons: List<String>.from(json['beacons'] ?? []),
+      rssi: json['rssi'],
     );
   }
 
@@ -68,6 +71,7 @@ class BeaconPointLocation {
       'latitude': latitude,
       'longitude': longitude,
       'beacons': beacons,
+      'rssi': rssi,
     };
   }
 }
