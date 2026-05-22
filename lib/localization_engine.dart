@@ -204,7 +204,7 @@ class LocalizationEngine{
         }
         for (var event in bleBatch) {
           var result = detector.processEvent(event);
-          print("peakValley Result found $result");
+          // print("peakValley Result found $result");
           if(result != null){
             var beacon = _localization?.getBeaconDetails(result.name);
             if(beacon != null && (floorConfig?[beacon.buildingID]?[beacon.floor]?["peakValley"]??-75) < result.peakRssi){
