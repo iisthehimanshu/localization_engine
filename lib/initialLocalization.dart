@@ -22,6 +22,7 @@ class InitialLocalization{
 
   Beacon? getBeaconDetails(String beaconName){
     Beacon? beacon = _apibeaconmap[beaconName];
+    print("apibeaconMap $_apibeaconmap");
     return beacon;
   }
 

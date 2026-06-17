@@ -18,6 +18,21 @@ import 'nearest_beacon_resolver.dart';
 
 export 'package:adapter_manager/adapter_manager.dart';
 
+/// Real-time indoor + outdoor positioning engine.
+///
+/// Fuses BLE beacon scanning with GPS to estimate a user's location inside a
+/// configured venue, exposes the result via the [userLocation] stream, and
+/// reports the position to the backend over a WebSocket for live tracking.
+///
+/// Constructing an instance immediately begins permission setup, scanning,
+/// location resolution, and tracking — there is no separate start call.
+///
+/// ```dart
+/// final engine = LocalizationEngine('IITDelhi');
+/// engine.userLocation.listen((location) {
+///   // handle fused beacon/GPS location
+/// });
+/// ```
 class LocalizationEngine{
   final MethodChannel _methodChannel = MethodChannel('localization_engine');
   final EventChannel _bleEventChannel = EventChannel('ble_scan_stream');
@@ -27,24 +42,51 @@ class LocalizationEngine{
   final _gpsBuffer = GPSBuffer();
 
   bool _isScanning = false;
+
+  /// Whether the engine is currently scanning for beacons and GPS samples.
   bool get isScanning => _isScanning;
 
+  /// Shared WebSocket service used to stream tracking payloads to the backend.
   static final wsService = WebSocketService();
 
   final _userLocation = StreamController<LocalizationEngineLocation>.broadcast();
+
+  /// Primary output stream of fused location updates.
+  ///
+  /// Emits roughly every 3 seconds (the collection window). Each event is the
+  /// JSON form of a [LocalizationEngineLocation] — a map with `beaconLocation`,
+  /// `gpsLocation`, and `message` keys, any of which may be `null`.
   Stream<Map<String, dynamic>> get userLocation => _userLocation.stream.map((location) => location.toJson());
   StreamSubscription<LocalizationEngineLocation>? _trackingSubscription;
   Future<void>? _locationLoopTask;
   int _runId = 0;
   final detector = PeakValleyDetector(historySize: 4);
+
+  /// Per-building, per-floor tuning thresholds, keyed as
+  /// `buildingId -> floor -> settingName -> value`.
+  ///
+  /// Recognized settings are `initialLocalizationThreshold` (minimum `|RSSI|`
+  /// to accept a beacon fix, default `85`) and `peakValley` (minimum peak RSSI
+  /// for a peak/valley hit, default `-75`).
   static Map<String, Map<int, Map<String, dynamic>>>? floorConfig;
 
+  /// Creates the engine for [venueName] and immediately starts scanning,
+  /// location resolution, and backend tracking.
+  ///
+  /// [baseURL] overrides the backend base URL (defaults to the dev/prod URL
+  /// based on build mode). [floorConfig] supplies optional per-floor tuning
+  /// thresholds; see [LocalizationEngine.floorConfig].
   LocalizationEngine(String venueName, {String? baseURL, Map<String, Map<int, Map<String, dynamic>>>? floorConfig}){
     LocalizationEngine.floorConfig = floorConfig;
     AppConfig.url = baseURL;
     init(venueName: venueName);
   }
 
+  /// Starts (or re-starts) scanning, the resolution loop, and tracking for
+  /// [venueName].
+  ///
+  /// Called automatically by the constructor — you normally don't invoke this
+  /// directly. Use [restart] to cleanly re-initialize an existing instance.
   Future<void> init({required String venueName}) async {
     print("init called of localization");
     _runId++;
@@ -53,6 +95,11 @@ class LocalizationEngine{
     _trackUserLocation(venueName: venueName);
   }
 
+  /// Cleanly tears down the current run and re-initializes for [venueName].
+  ///
+  /// Cancels in-flight loops and subscriptions, resets internal state, clears
+  /// the GPS buffer, and reconnects the WebSocket. Call this after the user
+  /// grants previously denied permissions or to switch venues.
   Future<void> restart({required String venueName}) async {
     // Invalidate in-flight loops/listeners and stop active scanning first.
     _runId++;
@@ -115,6 +162,10 @@ class LocalizationEngine{
 
   final _bleController = StreamController<Map<String, dynamic>?>.broadcast();
 
+  /// Raw, RSSI-filtered BLE scan results (`|rssi|` kept within `55`–`110`).
+  ///
+  /// Intended for diagnostics, logging, or signal-strength UIs. For resolved
+  /// positions use [userLocation] instead.
   Stream<Map<String, dynamic>?> get bluetoothScanResults => _bleController.stream;
 
   StreamSubscription? _bleSubscription;
@@ -127,6 +178,12 @@ class LocalizationEngine{
         final List<dynamic> rawList = event as List;
         for(var entry in rawList){
           final map = Map<String, dynamic>.from(entry);
+
+          final rawRssi = map['rssi'];
+          if (rawRssi == null) continue;
+          final rssi = (rawRssi as num).abs();
+          if (rssi < 55 || rssi > 110) continue;
+
           _bleController.add(map);
           return;
         }
@@ -141,6 +198,9 @@ class LocalizationEngine{
 
   final _gpsController = StreamController<Map<String, dynamic>?>.broadcast();
 
+  /// Raw GPS samples emitted by the native side (`latitude`/`longitude`).
+  ///
+  /// Intended for diagnostics. For resolved positions use [userLocation].
   Stream<Map<String, dynamic>?> get gpsScanResults => _gpsController.stream;
 
   StreamSubscription? _gpsSubscription;
@@ -199,8 +259,12 @@ class LocalizationEngine{
 
         final resolver = NearestBeaconResolver(_localization!);
         beaconLocation = resolver.resolve(filteredData);
-        if(beaconLocation != null && floorConfig?[beaconLocation.bid]?[beaconLocation.floor]?["initialLocalizationThreshold"] != null && floorConfig?[beaconLocation.bid]?[beaconLocation.floor]?["initialLocalizationThreshold"] < beaconLocation.rssi){
-          beaconLocation = null;
+        int? bestFloor = beaconLocation?.bestFloor;
+        if (beaconLocation != null && beaconLocation.rssi != null) {
+          final threshold = floorConfig?[beaconLocation.bid]?[beaconLocation.floor]?["initialLocalizationThreshold"] ?? 85;
+          if (threshold > beaconLocation.rssi!.abs()) {
+            beaconLocation = null;
+          }
         }
         for (var event in bleBatch) {
           var result = detector.processEvent(event);
@@ -209,7 +273,7 @@ class LocalizationEngine{
             var beacon = _localization?.getBeaconDetails(result.name);
             if(beacon != null && (floorConfig?[beacon.buildingID]?[beacon.floor]?["peakValley"]??-75) < result.peakRssi){
               print("peakValleyBeacon ${beacon.name}");
-              beaconLocation = BeaconPointLocation(x: beacon.coordinateX!, y: beacon.coordinateY!, bid: beacon.buildingID!, floor: beacon.floor!, latitude: double.parse(beacon.properties!.latitude!), longitude: double.parse(beacon.properties!.longitude!), beacons: [result.name], rssi: result.peakRssi.toDouble());
+              beaconLocation = BeaconPointLocation(x: beacon.coordinateX!, y: beacon.coordinateY!, bid: beacon.buildingID!, floor: beacon.floor!, latitude: double.parse(beacon.properties!.latitude!), longitude: double.parse(beacon.properties!.longitude!), beacons: [result.name], rssi: result.peakRssi.toDouble(), bestFloor: beacon.floor!);
             }else{
               print("PeakValley result discarded for ${result.name}");
             }
@@ -220,7 +284,7 @@ class LocalizationEngine{
           _gpsBuffer.add(data['latitude'], data['longitude']);
         }
         List<double>? gpsBufferLocation = _gpsBuffer.getRobustPosition();
-        if (gpsBufferLocation != null) {
+        if (gpsBufferLocation != null && (bestFloor == null || bestFloor == 0)) {
           gpsLocation = GPSLocation(
             latitude: gpsBufferLocation[0],
             longitude: gpsBufferLocation[1],

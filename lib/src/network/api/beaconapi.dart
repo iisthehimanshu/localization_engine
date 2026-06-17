@@ -9,6 +9,8 @@ class beaconapi {
 
   Future<List<Beacon>> fetchBeaconData(String venueName) async {
 
+    print("fetchBeaconData  $baseUrl");
+
     final Map<String, dynamic> data = {
       "venueName": venueName,
     };
@@ -22,6 +24,7 @@ class beaconapi {
 
     if (response.statusCode == 200) {
       List<dynamic> responseBody = json.decode(response.body);
+      print("fetchBeaconData $responseBody");
       List<Beacon> beaconList = responseBody.map((data) => Beacon.fromJson(data)).toList();
         return beaconList;
     }else {

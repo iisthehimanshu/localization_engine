@@ -10,6 +10,14 @@ packages:
       url: "https://github.com/iisthehimanshu/adaptermanager"
     source: git
     version: "0.0.1"
+  android_id:
+    dependency: transitive
+    description:
+      name: android_id
+      sha256: f6489be4c4380cdb55a99db5b03764d936e84e9d5258a26571aa500bd1159fe0
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.4.1"
   app_settings:
     dependency: transitive
     description:
