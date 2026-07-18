@@ -1,12 +1,14 @@
 class GPSBuffer {
   final List<double> _latitudes = [];
   final List<double> _longitudes = [];
+  final List<DateTime> _times = [];
 
   GPSBuffer();
 
-  void add(double lat, double lon) {
+  void add(double lat, double lon, [DateTime? ts]) {
     _latitudes.add(lat);
     _longitudes.add(lon);
+    _times.add(ts ?? DateTime.now());
   }
 
   void Print(){
@@ -16,9 +18,33 @@ class GPSBuffer {
   void clear(){
     _latitudes.clear();
     _longitudes.clear();
+    _times.clear();
   }
 
+  /// Robust position over all buffered samples. Clears the buffer afterwards.
   List<double>? getRobustPosition() {
+    final result = _robustPosition(_latitudes, _longitudes);
+    clear();
+    return result;
+  }
+
+  /// Robust position over only the samples received within the last [window].
+  ///
+  /// Evicts samples older than the window, then computes the robust position
+  /// over what remains. Does **not** clear the buffer, so the sliding window
+  /// carries over to the next call.
+  List<double>? getWindowedRobustPosition(Duration window) {
+    final cutoff = DateTime.now().subtract(window);
+    while (_times.isNotEmpty && _times.first.isBefore(cutoff)) {
+      _times.removeAt(0);
+      _latitudes.removeAt(0);
+      _longitudes.removeAt(0);
+    }
+    return _robustPosition(_latitudes, _longitudes);
+  }
+
+  /// MAD-based outlier rejection + average over the given lat/lon lists.
+  List<double>? _robustPosition(List<double> lats, List<double> lons) {
     List<double>? filterOutliers(List<double> values) {
       List<double> sorted = [...values]..sort();
       if(sorted.isEmpty) return null;
@@ -30,8 +56,8 @@ class GPSBuffer {
       return values.where((v) => (v - median).abs() <= threshold).toList();
     }
 
-    List<double>? filteredLat = filterOutliers(_latitudes);
-    List<double>? filteredLon = filterOutliers(_longitudes);
+    List<double>? filteredLat = filterOutliers(lats);
+    List<double>? filteredLon = filterOutliers(lons);
     if(filteredLat == null || filteredLon == null){
       return null;
     }
@@ -39,11 +65,10 @@ class GPSBuffer {
 
     double initLat = filteredLat.isNotEmpty
         ? avg(filteredLat)
-        : _latitudes[_latitudes.length ~/ 2];
+        : lats[lats.length ~/ 2];
     double initLon = filteredLon.isNotEmpty
         ? avg(filteredLon)
-        : _longitudes[_longitudes.length ~/ 2];
-    clear();
+        : lons[lons.length ~/ 2];
     return [initLat, initLon];
   }
 }

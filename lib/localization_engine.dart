@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:localization_engine/src/GPS/GPSBuffer.dart';
 import 'package:localization_engine/src/PeakValleyDetector.dart';
 import 'package:localization_engine/src/config/config.dart';
+import 'package:localization_engine/src/localizationAlgorithm/ble_position_estimator.dart';
 import 'package:localization_engine/src/network/api/UserTrackingWebSocket.dart';
 
 import 'initialLocalization.dart';
@@ -53,7 +54,8 @@ class LocalizationEngine{
 
   /// Primary output stream of fused location updates.
   ///
-  /// Emits roughly every 3 seconds (the collection window). Each event is the
+  /// Emits roughly every 1 second (the tick interval), each decision based on
+  /// up to the last 6 seconds of data. Each event is the
   /// JSON form of a [LocalizationEngineLocation] — a map with `beaconLocation`,
   /// `gpsLocation`, and `message` keys, any of which may be `null`.
   Stream<Map<String, dynamic>> get userLocation => _userLocation.stream.map((location) => location.toJson());
@@ -61,6 +63,16 @@ class LocalizationEngine{
   Future<void>? _locationLoopTask;
   int _runId = 0;
   final detector = PeakValleyDetector(historySize: 4);
+
+  /// When `true`, indoor positions are resolved with [BLEPositionEstimator]
+  /// (softmax-weighted centroid + EMA smoothing). When `false`, the engine
+  /// falls back to the original [NearestBeaconResolver]. Flip this to switch
+  /// algorithms.
+  bool useBLEPositionEstimator = true;
+
+  /// Persistent estimator instance so its rolling window / EMA state survives
+  /// across collection windows. Lazily created once the beacon map is loaded.
+  BLEPositionEstimator? _positionEstimator;
 
   /// Per-building, per-floor tuning thresholds, keyed as
   /// `buildingId -> floor -> settingName -> value`.
@@ -95,6 +107,11 @@ class LocalizationEngine{
     _trackUserLocation(venueName: venueName);
   }
 
+  static void setFloorConfig(Map<String, Map<int, Map<String, dynamic>>>? updatedFloorConfig){
+    print("updatedFloorConfig ${updatedFloorConfig}");
+    floorConfig = updatedFloorConfig;
+  }
+
   /// Cleanly tears down the current run and re-initializes for [venueName].
   ///
   /// Cancels in-flight loops and subscriptions, resets internal state, clears
@@ -109,6 +126,7 @@ class LocalizationEngine{
 
     // Reset internal state
     _localization = null;
+    _positionEstimator = null;
     _gpsBuffer.clear();
 
     // Reconnect WebSocket
@@ -182,7 +200,7 @@ class LocalizationEngine{
           final rawRssi = map['rssi'];
           if (rawRssi == null) continue;
           final rssi = (rawRssi as num).abs();
-          if (rssi < 55 || rssi > 110) continue;
+          if (rssi < 50 || rssi > 110) continue;
 
           _bleController.add(map);
           return;
@@ -227,9 +245,19 @@ class LocalizationEngine{
     required int runId,
   }) async {
 
-    // Buffers shared across iterations
+    // Sliding window / tick length. Every [tickSeconds] we emit a decision
+    // based on (up to) the last [windowSeconds] of data.
+    const windowSeconds = 6;
+    const tickSeconds = 1;
+
+    // Raw incoming buffers, drained into the 1-second increment each tick.
     final List<Map<String, dynamic>> bleData = [];
     final List<Map<String, dynamic>> gpsData = [];
+
+    // 6-second sliding BLE window, used only by the fallback resolver.
+    // (The estimator keeps its own internal rolling window; GPS windowing
+    // lives in GPSBuffer.)
+    final List<MapEntry<DateTime, Map<String, dynamic>>> bleWindow = [];
 
     // Attach listeners ONCE
     final bleSubscription = bluetoothScanResults.listen((data) {
@@ -244,46 +272,67 @@ class LocalizationEngine{
     Future<void> collectAndEmit() async {
       BeaconPointLocation? beaconLocation;
       GPSLocation? gpsLocation;
-      // Wait for data to accumulate
-      await Future.delayed(const Duration(seconds: 3));
+      // Wait one tick for fresh data to arrive.
+      await Future.delayed(const Duration(seconds: tickSeconds));
 
-      // Snapshot and clear buffers atomically for this window
-      final bleBatch = List<Map<String, dynamic>>.from(bleData);
-      final gpsBatch = List<Map<String, dynamic>>.from(gpsData);
+      // Snapshot and clear the 1-second increment atomically for this tick.
+      final now = DateTime.now();
+      final bleIncrement = List<Map<String, dynamic>>.from(bleData);
+      final gpsIncrement = List<Map<String, dynamic>>.from(gpsData);
       bleData.clear();
       gpsData.clear();
 
       try {
-        final scanData = groupByDevice(bleBatch);
-        final filteredData = _localization?.filterBeacons(scanData) ?? scanData;
+        if (useBLEPositionEstimator) {
+          // Estimator keeps its own 6s rolling window — feed only the new
+          // readings each tick.
+          final scanData = groupByDevice(bleIncrement);
+          final filteredData =
+              _localization?.filterBeacons(scanData) ?? scanData;
+          beaconLocation = _resolveWithEstimator(filteredData);
+        } else {
+          // Stateless resolver — feed it the whole 6s sliding BLE window.
+          for (final item in bleIncrement) {
+            bleWindow.add(MapEntry(now, item));
+          }
+          final cutoff = now.subtract(const Duration(seconds: windowSeconds));
+          bleWindow.removeWhere((e) => e.key.isBefore(cutoff));
 
-        final resolver = NearestBeaconResolver(_localization!);
-        beaconLocation = resolver.resolve(filteredData);
+          final windowBatch = bleWindow.map((e) => e.value).toList();
+          final scanData = groupByDevice(windowBatch);
+          final filteredData =
+              _localization?.filterBeacons(scanData) ?? scanData;
+          final resolver = NearestBeaconResolver(_localization!);
+          beaconLocation = resolver.resolve(filteredData);
+        }
         int? bestFloor = beaconLocation?.bestFloor;
-        if (beaconLocation != null && beaconLocation.rssi != null) {
-          final threshold = floorConfig?[beaconLocation.bid]?[beaconLocation.floor]?["initialLocalizationThreshold"] ?? 85;
-          if (threshold > beaconLocation.rssi!.abs()) {
-            beaconLocation = null;
-          }
-        }
-        for (var event in bleBatch) {
-          var result = detector.processEvent(event);
-          // print("peakValley Result found $result");
-          if(result != null){
-            var beacon = _localization?.getBeaconDetails(result.name);
-            if(beacon != null && (floorConfig?[beacon.buildingID]?[beacon.floor]?["peakValley"]??-75) < result.peakRssi){
-              print("peakValleyBeacon ${beacon.name}");
-              beaconLocation = BeaconPointLocation(x: beacon.coordinateX!, y: beacon.coordinateY!, bid: beacon.buildingID!, floor: beacon.floor!, latitude: double.parse(beacon.properties!.latitude!), longitude: double.parse(beacon.properties!.longitude!), beacons: [result.name], rssi: result.peakRssi.toDouble(), bestFloor: beacon.floor!);
-            }else{
-              print("PeakValley result discarded for ${result.name}");
-            }
-          }
-        }
+        // if (beaconLocation != null && beaconLocation.rssi != null) {
+        //   final threshold = floorConfig?[beaconLocation.bid]?[beaconLocation.floor]?["initialLocalizationThreshold"] ?? 75;
+        //   print("initialLocalizationThreshold ${floorConfig?[beaconLocation.bid]?[beaconLocation.floor]?["initialLocalizationThreshold"]?.abs()}");
+        //   if (threshold.abs() < beaconLocation.rssi!.abs()) {
+        //     beaconLocation = null;
+        //   }
+        // }
 
-        for (var data in gpsBatch) {
+        // for (var event in bleBatch) {
+        //   var result = detector.processEvent(event);
+        //   // print("peakValley Result found $result");
+        //   if(result != null){
+        //     var beacon = _localization?.getBeaconDetails(result.name);
+        //     if(beacon != null && (floorConfig?[beacon.buildingID]?[beacon.floor]?["peakValley"]??70).abs() > result.peakRssi.abs()){
+        //       print("peakValleyBeacon ${beacon.name} ${result.peakRssi.abs()}    floorConfig Threshold ${(floorConfig?[beacon.buildingID]?[beacon.floor]?["peakValley"])?.abs()}");
+        //       beaconLocation = BeaconPointLocation(x: beacon.coordinateX!, y: beacon.coordinateY!, bid: beacon.buildingID!, floor: beacon.floor!, latitude: double.parse(beacon.properties!.latitude!), longitude: double.parse(beacon.properties!.longitude!), beacons: [result.name], rssi: result.peakRssi.toDouble(), bestFloor: beacon.floor!);
+        //     }else{
+        //       print("PeakValley result discarded for ${result.name}");
+        //     }
+        //   }
+        // }
+
+        for (var data in gpsIncrement) {
           _gpsBuffer.add(data['latitude'], data['longitude']);
         }
-        List<double>? gpsBufferLocation = _gpsBuffer.getRobustPosition();
+        List<double>? gpsBufferLocation = _gpsBuffer
+            .getWindowedRobustPosition(const Duration(seconds: windowSeconds));
         if (gpsBufferLocation != null && (bestFloor == null || bestFloor == 0)) {
           gpsLocation = GPSLocation(
             latitude: gpsBufferLocation[0],
@@ -299,7 +348,8 @@ class LocalizationEngine{
         ));
 
       } on StateError {
-        List<double>? gpsBufferLocation = _gpsBuffer.getRobustPosition();
+        List<double>? gpsBufferLocation = _gpsBuffer
+            .getWindowedRobustPosition(const Duration(seconds: windowSeconds));
         if (gpsBufferLocation != null) {
           gpsLocation = GPSLocation(
             latitude: gpsBufferLocation[0],
@@ -335,6 +385,49 @@ class LocalizationEngine{
 
       await bleSubscription.cancel();
       await gpsSubscription.cancel();
+  }
+
+  /// Resolves an indoor position with [BLEPositionEstimator], mapping its
+  /// [PositionResult] onto a [BeaconPointLocation].
+  ///
+  /// The smoothed coordinates become [BeaconPointLocation.x]/[y]; every other
+  /// field (building, floor, lat/lon) is read from the rank-1 beacon looked up
+  /// in [InitialLocalization.apibeaconmap]. Returns `null` when the estimator
+  /// has no fix or the rank-1 beacon is not in the map.
+  BeaconPointLocation? _resolveWithEstimator(
+      Map<String, List<MapEntry<DateTime, int>>> filteredData) {
+    final localization = _localization;
+    if (localization == null) return null;
+
+    // Lazily build the estimator over the loaded beacon map.
+    _positionEstimator ??=
+        BLEPositionEstimator(beaconDb: localization.apibeaconmap);
+
+    // Flatten grouped scan data into individual timestamped readings.
+    final readings = <BleReading>[];
+    filteredData.forEach((name, entries) {
+      for (final e in entries) {
+        readings.add(BleReading(name: name, rssi: e.value, timestamp: e.key));
+      }
+    });
+
+    final pos = _positionEstimator!.update(readings, walking: true);
+    if (pos == null) return null;
+
+    final rank1 = localization.apibeaconmap[pos.rank1Beacon];
+    if (rank1 == null) return null;
+
+    return BeaconPointLocation(
+      x: pos.smoothX.round(),
+      y: pos.smoothY.round(),
+      bid: rank1.buildingID!,
+      floor: rank1.floor!,
+      latitude: double.parse(rank1.properties!.latitude!),
+      longitude: double.parse(rank1.properties!.longitude!),
+      beacons: [pos.rank1Beacon],
+      rssi: pos.rank1Rssi.toDouble(),
+      bestFloor: rank1.floor!,
+    );
   }
 
   Map<String, List<MapEntry<DateTime, int>>> groupByDevice(
