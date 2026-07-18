@@ -18,7 +18,7 @@ dependencies:
 #    path: ../../adapter_manager/
 
   socket_io_client:
-  device_info_plus: ^10.1.2
+  device_info_plus: ^12.4.0
   android_id: ^0.4.0
   shared_preferences: ^2.2.2
 
