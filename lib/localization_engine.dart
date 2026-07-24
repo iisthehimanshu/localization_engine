@@ -1,4 +1,4 @@
-import 'dart:async';
+import'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -12,12 +12,18 @@ import 'package:localization_engine/src/PeakValleyDetector.dart';
 import 'package:localization_engine/src/config/config.dart';
 import 'package:localization_engine/src/localizationAlgorithm/ble_position_estimator.dart';
 import 'package:localization_engine/src/network/api/UserTrackingWebSocket.dart';
+import 'package:localization_engine/src/network/api/beaconapi.dart';
+import 'package:localization_engine/src/network/model/beaconData.dart';
 
 import 'initialLocalization.dart';
 import 'location.dart';
 import 'nearest_beacon_resolver.dart';
 
 export 'package:adapter_manager/adapter_manager.dart';
+
+/// The venue beacon model (name, building, floor and lat/long) is re-exported
+/// so consumers can render or diagnose the configured beacons directly.
+export 'src/network/model/beaconData.dart';
 
 /// Real-time indoor + outdoor positioning engine.
 ///
@@ -160,6 +166,7 @@ class LocalizationEngine{
       await _methodChannel.invokeMethod('startScan');
       initGpsStream();
       initBleStream();
+      initEstimatorLocationStream();
       _isScanning = true;
     }else if(adapterState['PermanentlyDenied'] || adapterState['errors'].first.contains("permission denied")){
       throw PermissionException(adapterState['errors'].first);
@@ -171,6 +178,7 @@ class LocalizationEngine{
   Future<void> _stopScanning() async {
     await _methodChannel.invokeMethod('stopScan');
     await _methodChannel.invokeMethod('stopGpsScan');
+    await _stopEstimatorLocationStream();
     await _bleSubscription?.cancel();
     _bleSubscription = null;
     await _gpsSubscription?.cancel();
@@ -212,6 +220,66 @@ class LocalizationEngine{
     }, onError: (error) {
       print('bleStream error: $error');
     });
+  }
+
+  final _estimatorLocationController =
+      StreamController<BeaconPointLocation?>.broadcast();
+
+  /// Estimator-resolved location updates, emitted once per second.
+  ///
+  /// Driven solely by [bluetoothScanResults]: every second the readings that
+  /// arrived during the previous second are grouped, filtered, and passed to
+  /// [_resolveWithEstimator]. Each tick emits the resulting
+  /// [BeaconPointLocation] (or `null` when no fix could be resolved).
+  Stream<BeaconPointLocation?> get estimatorLocationStream =>
+      _estimatorLocationController.stream;
+
+  StreamSubscription<Map<String, dynamic>?>? _estimatorBleSubscription;
+  Timer? _estimatorTimer;
+
+  /// Dedicated estimator for [estimatorLocationStream] so its rolling-window /
+  /// EMA state stays independent of the main loop's [_positionEstimator].
+  BLEPositionEstimator? _estimatorStreamEstimator;
+
+  /// Starts the per-second estimator loop over [bluetoothScanResults].
+  ///
+  /// Buffers incoming BLE scan results and, every second, hands the previous
+  /// second's batch to [_resolveWithEstimator], pushing the result onto
+  /// [estimatorLocationStream].
+  void initEstimatorLocationStream() {
+    if (_estimatorBleSubscription != null || _estimatorTimer != null) return;
+
+    // Own estimator instance — independent state from the main loop.
+    final localization = _localization;
+    _estimatorStreamEstimator ??= localization == null
+        ? null
+        : BLEPositionEstimator(beaconDb: localization.apibeaconmap);
+
+    // Buffer of readings received during the current 1-second interval.
+    final List<Map<String, dynamic>> buffer = [];
+
+    _estimatorBleSubscription = bluetoothScanResults.listen((data) {
+      if (data != null) buffer.add(data);
+    });
+
+    _estimatorTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      // Snapshot and clear the previous second's readings atomically.
+      final batch = List<Map<String, dynamic>>.from(buffer);
+      buffer.clear();
+
+      final scanData = groupByDevice(batch);
+      final filteredData = _localization?.filterBeacons(scanData) ?? scanData;
+      _estimatorLocationController.add(_resolveWithEstimator(filteredData,
+          estimator: _estimatorStreamEstimator));
+    });
+  }
+
+  Future<void> _stopEstimatorLocationStream() async {
+    _estimatorTimer?.cancel();
+    _estimatorTimer = null;
+    await _estimatorBleSubscription?.cancel();
+    _estimatorBleSubscription = null;
+    _estimatorStreamEstimator = null;
   }
 
   final _gpsController = StreamController<Map<String, dynamic>?>.broadcast();
@@ -394,14 +462,21 @@ class LocalizationEngine{
   /// field (building, floor, lat/lon) is read from the rank-1 beacon looked up
   /// in [InitialLocalization.apibeaconmap]. Returns `null` when the estimator
   /// has no fix or the rank-1 beacon is not in the map.
+  ///
+  /// Pass [estimator] to resolve against a specific [BLEPositionEstimator]
+  /// instance (e.g. the estimator-stream's own estimator); when omitted the
+  /// shared [_positionEstimator] used by the main loop is lazily created and
+  /// used.
   BeaconPointLocation? _resolveWithEstimator(
-      Map<String, List<MapEntry<DateTime, int>>> filteredData) {
+      Map<String, List<MapEntry<DateTime, int>>> filteredData,
+      {BLEPositionEstimator? estimator}) {
     final localization = _localization;
     if (localization == null) return null;
 
     // Lazily build the estimator over the loaded beacon map.
-    _positionEstimator ??=
-        BLEPositionEstimator(beaconDb: localization.apibeaconmap);
+    final activeEstimator = estimator ??
+        (_positionEstimator ??=
+            BLEPositionEstimator(beaconDb: localization.apibeaconmap));
 
     // Flatten grouped scan data into individual timestamped readings.
     final readings = <BleReading>[];
@@ -411,7 +486,7 @@ class LocalizationEngine{
       }
     });
 
-    final pos = _positionEstimator!.update(readings, walking: true);
+    final pos = activeEstimator.update(readings, walking: true);
     if (pos == null) return null;
 
     final rank1 = localization.apibeaconmap[pos.rank1Beacon];
@@ -543,5 +618,16 @@ class LocalizationEngine{
       wsService.sendTracking(payload);
     });
   }
+
+  /// Fetches the venue's configured beacons (cache-first) for rendering or
+  /// diagnostics.
+  ///
+  /// Each [Beacon] carries its `name` (matching the `name` seen on
+  /// [bluetoothScanResults]), `buildingID`, `floor`, and geographic position
+  /// via `properties.latitude` / `properties.longitude`. Useful for plotting
+  /// the full beacon layout on a map and cross-referencing which of them are
+  /// currently visible on the BLE scan stream.
+  Future<List<Beacon>> fetchVenueBeacons(String venueName) =>
+      beaconapi().fetchBeaconData(venueName);
 
 }
