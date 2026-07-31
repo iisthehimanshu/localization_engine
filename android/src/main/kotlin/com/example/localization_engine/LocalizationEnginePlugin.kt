@@ -40,6 +40,55 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
   private var restartTimerRunnable: Runnable? = null
   private var eventSink: EventChannel.EventSink? = null
 
+  // Scan results are batched instead of dispatched per advertisement.
+  //
+  // SCAN_MODE_LOW_LATENCY + CALLBACK_TYPE_ALL_MATCHES + reportDelay(0) delivers
+  // ~230 callbacks/sec in a beacon-dense venue, and ScanCallback runs on the
+  // main looper — so every packet used to serialize a message and dispatch it
+  // over the EventChannel from the UI thread, starving the map of frames.
+  // Buffering and flushing 4x/sec cuts that to ~4 dispatches/sec with no loss
+  // of readings: the Dart side already groups by device over a 1-second window.
+  private val scanBuffer = ArrayList<Map<String, Any?>>()
+  private var flushRunnable: Runnable? = null
+  private val flushInterval: Long = 250L
+
+  // Both the ScanCallback and the flush Runnable run on the main looper, so the
+  // buffer needs no synchronization.
+  private fun scheduleFlush() {
+    if (flushRunnable != null) return
+    flushRunnable = object : Runnable {
+      override fun run() {
+        if (scanBuffer.isNotEmpty()) {
+          eventSink?.success(ArrayList(scanBuffer))
+          scanBuffer.clear()
+        }
+        if (isScanning) mainHandler.postDelayed(this, flushInterval)
+      }
+    }
+    mainHandler.postDelayed(flushRunnable!!, flushInterval)
+  }
+
+  private fun stopFlush() {
+    flushRunnable?.let { mainHandler.removeCallbacks(it) }
+    flushRunnable = null
+    scanBuffer.clear()
+  }
+
+  private val hexDigits = "0123456789ABCDEF".toCharArray()
+
+  /// `"%02X".format(byte)` per byte built a Formatter and parsed the format
+  /// string for every byte of every packet. This is the same output via a
+  /// lookup table.
+  private fun toHex(bytes: ByteArray): String {
+    val out = CharArray(bytes.size * 2)
+    for (i in bytes.indices) {
+      val v = bytes[i].toInt() and 0xFF
+      out[i * 2] = hexDigits[v ushr 4]
+      out[i * 2 + 1] = hexDigits[v and 0x0F]
+    }
+    return String(out)
+  }
+
   // GPS related
   private var locationManager: LocationManager? = null
   private var gpsEventSink: EventChannel.EventSink? = null
@@ -91,6 +140,7 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     isScanning = true
     startBleScan()
     schedulePeriodicRestart()
+    scheduleFlush()
   }
 
   private fun startBleScan() {
@@ -109,22 +159,22 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         var manufacturerHex: String? = null
         manufacturerData?.let { data ->
           if (data.size() > 0) {
-            val bytes = data.valueAt(0)
-            manufacturerHex = bytes.joinToString("") { "%02X".format(it) }
+            manufacturerHex = toHex(data.valueAt(0))
           }
         }
 
-        val dateTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.getDefault())
-          .format(java.util.Date(System.currentTimeMillis()))
-
+        // Epoch millis instead of a SimpleDateFormat string: constructing a
+        // SimpleDateFormat per packet (locale lookup, pattern parse, Calendar +
+        // NumberFormat allocation) was the single most expensive thing on this
+        // callback, and Dart only re-parsed the string back into a DateTime.
         val resultMap = mapOf(
           "device" to result.device.address,
           "name" to deviceName,
           "rssi" to result.rssi,
-          "timestamp" to dateTime,
+          "timestamp" to System.currentTimeMillis(),
           "manufacturerHex" to manufacturerHex
         )
-        eventSink?.success(listOf(resultMap))
+        scanBuffer.add(resultMap)
       }
     }
 
@@ -182,6 +232,7 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     val bluetoothLeScanner = bluetoothAdapter?.bluetoothLeScanner
     scanCallback?.let { bluetoothLeScanner?.stopScan(it) }
 
+    stopFlush()
     eventSink?.endOfStream()
 
     timeoutRunnable = null

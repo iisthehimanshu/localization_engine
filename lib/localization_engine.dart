@@ -210,8 +210,10 @@ class LocalizationEngine{
           final rssi = (rawRssi as num).abs();
           if (rssi < 50 || rssi > 110) continue;
 
+          // Native now delivers a batch per event rather than one reading, so
+          // this must forward every accepted entry — returning here would drop
+          // all but the first reading of each flush.
           _bleController.add(map);
-          return;
         }
       } catch (e) {
         print('Error processing rawBluetoothScanResults scan result: $e');
@@ -297,7 +299,6 @@ class LocalizationEngine{
         .listen((event) {
       try {
         final map = Map<String, dynamic>.from(event as Map);
-        print("_gpsController $map");
         _gpsController.add(map);
       } catch (e) {
         print('gpsStreamRaw error: $e');
@@ -333,7 +334,6 @@ class LocalizationEngine{
     });
 
     final gpsSubscription = gpsScanResults.listen((data) {
-      print("gpsSubscriptionDebuggggg  data incoming ${data}");
       if (data != null) gpsData.add(data);
     });
 
@@ -492,16 +492,18 @@ class LocalizationEngine{
     final rank1 = localization.apibeaconmap[pos.rank1Beacon];
     if (rank1 == null) return null;
 
+    // Building/floor come from the estimator, not the rank-1 beacon: they are
+    // what the coordinates were actually resolved against.
     return BeaconPointLocation(
       x: pos.smoothX.round(),
       y: pos.smoothY.round(),
-      bid: rank1.buildingID!,
-      floor: rank1.floor!,
+      bid: pos.building,
+      floor: pos.floor,
       latitude: double.parse(rank1.properties!.latitude!),
       longitude: double.parse(rank1.properties!.longitude!),
       beacons: [pos.rank1Beacon],
       rssi: pos.rank1Rssi.toDouble(),
-      bestFloor: rank1.floor!,
+      bestFloor: pos.floor,
     );
   }
 
@@ -514,10 +516,13 @@ class LocalizationEngine{
       try {
         final String name = item['name'];
 
-        // Handle both String and DateTime safely
-        final DateTime timestamp = item['timestamp'] is DateTime
-            ? item['timestamp']
-            : DateTime.parse(item['timestamp'].toString());
+        // Handle DateTime, epoch millis (what native sends), and String.
+        final rawTimestamp = item['timestamp'];
+        final DateTime timestamp = rawTimestamp is DateTime
+            ? rawTimestamp
+            : rawTimestamp is int
+                ? DateTime.fromMillisecondsSinceEpoch(rawTimestamp)
+                : DateTime.parse(rawTimestamp.toString());
 
         final int rssi = item['rssi'] is int
             ? item['rssi']

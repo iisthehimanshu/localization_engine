@@ -38,6 +38,14 @@ class PositionResult {
   final String confidence;
   /// "walking" | "stationary"
   final String motionState;
+  /// Building the fix was resolved in — coordinates are only meaningful
+  /// relative to this building's floor-plan grid.
+  final String building;
+  /// Floor the fix was resolved on
+  final int floor;
+  /// True when this update switched to a different building, meaning the
+  /// smoothing state was reset and the position teleported to a new grid.
+  final bool buildingChanged;
   /// Strongest beacon this window
   final String rank1Beacon;
   final int    rank1Rssi;
@@ -53,6 +61,8 @@ class PositionResult {
     required this.rawX,        required this.rawY,
     this.smoothLat,            this.smoothLon,
     required this.confidence,  required this.motionState,
+    required this.building,    required this.floor,
+    this.buildingChanged = false,
     required this.rank1Beacon, required this.rank1Rssi,
     required this.rank1Weight, required this.jumpPx,
     required this.nBeacons,
@@ -61,17 +71,21 @@ class PositionResult {
   @override
   String toString() =>
     'pos=(${smoothX.toStringAsFixed(1)}, ${smoothY.toStringAsFixed(1)}) '
+    'bid=$building floor=$floor '
     'conf=$confidence motion=$motionState b1=$rank1Beacon '
-    'jump=${jumpPx.toStringAsFixed(1)}px';
+    'jump=${jumpPx.toStringAsFixed(1)}px'
+    '${buildingChanged ? ' BUILDING-SWITCH' : ''}';
 }
 
 // ── Internal aggregation state ────────────────────────────────────────────────
 class _Agg {
-  final int lx, ly, floor;
+  final int    lx, ly, floor;
+  final String building;
   int peak, n;
   double penPeak = 0, score = 0;
   _Agg({
     required this.lx, required this.ly, required this.floor,
+    required this.building,
     required this.peak, required this.n,
   });
 }
@@ -101,6 +115,10 @@ class BLEPositionEstimator {
   // Force a specific floor. null = auto-detect from majority vote.
   final int? floor;
 
+  // Force a specific building. null = auto-detect from the strongest beacon
+  // (with hysteresis, see [_selectBuilding]).
+  final String? building;
+
   // ── Tunable constants ──────────────────────────────────────────────────────
   static const double _continuityBonus  = 0.5;   // dBm bonus for repeat beacons
   static const double _rssiGapThresh    = 8.0;   // heuristic walking signal
@@ -111,6 +129,9 @@ class BLEPositionEstimator {
   static const double _maxJumpWalk      = 30.0;  // max px/update walking    ~7.5m
   static const int    _rssiMin          = -110;
   static const int    _rssiMax          = -55;
+  // dBm the challenger building must beat the current one by before we switch.
+  // Prevents flapping between buildings at a shared boundary.
+  static const double _bldSwitchMargin  = 4.0;
 
   // ── Rolling state ──────────────────────────────────────────────────────────
   final Queue<_BufEntry> _buf = Queue();
@@ -118,6 +139,11 @@ class BLEPositionEstimator {
   Set<String>   _prevTop2 = {};
   String?       _prevR1;
   List<double>? _prevRawPos;
+  String?       _currBuilding;
+
+  /// Building the last fix was resolved in — coordinates from previous
+  /// results are only comparable while this is unchanged.
+  String? get currentBuilding => _currBuilding;
 
   BLEPositionEstimator({
     required this.beaconDb,
@@ -125,6 +151,7 @@ class BLEPositionEstimator {
     this.temp    = 5.0,
     this.topN    = 5,
     this.floor,
+    this.building,
   });
 
   // ── Call this from your BLE scan callback ─────────────────────────────────
@@ -161,12 +188,21 @@ class BLEPositionEstimator {
         agg[e.name]!.peak = max(agg[e.name]!.peak, e.rssi);
         agg[e.name]!.n++;
       } else {
+        // A beacon without a building / grid position cannot be placed on any
+        // floor plan — skip it rather than dragging the centroid somewhere
+        // arbitrary.
+        if (meta.coordinateX == null ||
+            meta.coordinateY == null ||
+            meta.floor      == null ||
+            meta.buildingID == null) continue;
         agg[e.name] = _Agg(
           lx: meta.coordinateX!, ly: meta.coordinateY!, floor: meta.floor!,
+          building: meta.buildingID!,
           peak: e.rssi, n: 1,
         );
       }
     }
+    if (agg.isEmpty) return null;
 
     // ── 4. RSSI penalty for sparse readings ──────────────────────────────
     for (final b in agg.values) {
@@ -174,21 +210,44 @@ class BLEPositionEstimator {
           (b.n == 1 ? -4.0 : b.n == 2 ? -2.0 : 0.0);
     }
 
-    // ── 5. Floor selection ───────────────────────────────────────────────
-    final targetFloor = floor ?? _majorityFloor(agg);
-    final floorEntries = agg.entries
+    // ── 5. Building selection ────────────────────────────────────────────
+    // Must happen before the floor vote: floor numbers are only unique within
+    // a building, and each building has its own floor-plan coordinate grid.
+    // Mixing two buildings would average coordinates from unrelated grids.
+    final targetBuilding = building ?? _selectBuilding(agg);
+    final bldEntries = agg.entries
+        .where((e) => e.value.building == targetBuilding)
+        .toList();
+    if (bldEntries.isEmpty) return null;
+
+    // Entering a different building invalidates every piece of smoothing
+    // state — the old EMA position, velocity cap and continuity set all refer
+    // to a coordinate grid that no longer applies.
+    final buildingChanged =
+        _currBuilding != null && _currBuilding != targetBuilding;
+    if (buildingChanged) {
+      _emaPos     = null;
+      _prevTop2   = {};
+      _prevR1     = null;
+      _prevRawPos = null;
+    }
+    _currBuilding = targetBuilding;
+
+    // ── 6. Floor selection (within the chosen building) ──────────────────
+    final targetFloor = floor ?? _majorityFloor(bldEntries);
+    final floorEntries = bldEntries
         .where((e) => e.value.floor == targetFloor)
         .toList();
     if (floorEntries.isEmpty) return null;
 
-    // ── 6. Continuity bonus + re-rank ────────────────────────────────────
+    // ── 7. Continuity bonus + re-rank ────────────────────────────────────
     for (final e in floorEntries) {
       e.value.score = e.value.penPeak +
           (_prevTop2.contains(e.key) ? _continuityBonus : 0.0);
     }
     floorEntries.sort((a, b) => b.value.score.compareTo(a.value.score));
 
-    // ── 7. Softmax weighted centroid on top-N ────────────────────────────
+    // ── 8. Softmax weighted centroid on top-N ────────────────────────────
     final top    = floorEntries.take(topN).toList();
     final rssis  = top.map((e) => e.value.penPeak).toList();
     final maxR   = rssis.reduce(max);
@@ -208,7 +267,7 @@ class BLEPositionEstimator {
         ? (floorEntries[0].value.penPeak - floorEntries[1].value.penPeak).abs()
         : 0.0;
 
-    // ── 8. Motion detection ──────────────────────────────────────────────
+    // ── 9. Motion detection ──────────────────────────────────────────────
     final bool isWalking;
     if (walking != null) {
       // Explicit flag from app navigation state — most accurate
@@ -232,7 +291,7 @@ class BLEPositionEstimator {
     final alpha   = isWalking ? _alphaWalking   : _alphaStationary;
     final maxJump = isWalking ? _maxJumpWalk     : _maxJumpStat;
 
-    // ── 9. Velocity cap + EMA ────────────────────────────────────────────
+    // ── 10. Velocity cap + EMA ───────────────────────────────────────────
     double jumpPx = 0.0;
     if (_emaPos == null) {
       _emaPos = [rawX, rawY];
@@ -254,8 +313,8 @@ class BLEPositionEstimator {
 
     final sx = _emaPos![0], sy = _emaPos![1];
 
-    // ── 10. GPS estimate ─────────────────────────────────────────────────
-    final gps = _localToGps(sx, sy);
+    // ── 11. GPS estimate (anchors from this building only) ───────────────
+    final gps = _localToGps(sx, sy, targetBuilding);
 
     // Update rolling state
     _prevTop2   = currTop2;
@@ -273,6 +332,9 @@ class BLEPositionEstimator {
       smoothLon:   gps?[1],
       confidence:  _confidence(top.length, floorEntries.first.value.penPeak, topW),
       motionState: isWalking ? 'walking' : 'stationary',
+      building:    targetBuilding,
+      floor:       targetFloor,
+      buildingChanged: buildingChanged,
       rank1Beacon: floorEntries.first.key,
       rank1Rssi:   floorEntries.first.value.peak,
       rank1Weight: topW,
@@ -284,25 +346,54 @@ class BLEPositionEstimator {
   // ── Reset all state (call when starting a new session) ─────────────────
   void reset() {
     _buf.clear();
-    _emaPos     = null;
-    _prevTop2   = {};
-    _prevR1     = null;
-    _prevRawPos = null;
+    _emaPos       = null;
+    _prevTop2     = {};
+    _prevR1       = null;
+    _prevRawPos   = null;
+    _currBuilding = null;
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
-  int _majorityFloor(Map<String, _Agg> agg) {
-    final counts = <int, int>{};
+  /// Picks the building the user is most likely inside.
+  ///
+  /// Scored on the strongest (penalty-adjusted) beacon per building rather
+  /// than beacon count — a handful of loud nearby beacons beats a crowd of
+  /// faint ones bleeding through from the building next door. The incumbent
+  /// building is kept unless a challenger beats it by [_bldSwitchMargin] dBm,
+  /// so we don't flap back and forth at a shared boundary.
+  String _selectBuilding(Map<String, _Agg> agg) {
+    final best = <String, double>{};
     for (final v in agg.values) {
-      counts[v.floor] = (counts[v.floor] ?? 0) + 1;
+      final b = best[v.building];
+      if (b == null || v.penPeak > b) best[v.building] = v.penPeak;
+    }
+
+    final leader =
+        best.entries.reduce((a, b) => a.value >= b.value ? a : b);
+
+    final curr = _currBuilding;
+    if (curr == null || !best.containsKey(curr)) {
+      // No incumbent, or it has dropped out of the window entirely.
+      return leader.key;
+    }
+    return leader.value > best[curr]! + _bldSwitchMargin ? leader.key : curr;
+  }
+
+  int _majorityFloor(List<MapEntry<String, _Agg>> entries) {
+    final counts = <int, int>{};
+    for (final e in entries) {
+      counts[e.value.floor] = (counts[e.value.floor] ?? 0) + 1;
     }
     return counts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
   }
 
-  List<double>? _localToGps(double lx, double ly) {
+  List<double>? _localToGps(double lx, double ly, String building) {
     double tw = 0, la = 0, lo = 0;
     for (final m in beaconDb.values) {
+      // Anchors from another building sit on a different pixel grid, so their
+      // distance to (lx, ly) is meaningless.
+      if (m.buildingID != building) continue;
       final lat = double.tryParse(m.properties?.latitude ?? '');
       final lon = double.tryParse(m.properties?.longitude ?? '');
       if (lat == null || lon == null) continue;

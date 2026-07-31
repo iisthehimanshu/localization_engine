@@ -45,7 +45,9 @@ class BeaconReading {
       rssi: map['rssi'] as int,
       timestamp: map['timestamp'] is DateTime
           ? map['timestamp'] as DateTime
-          : DateTime.parse(map['timestamp'].toString()),
+          : map['timestamp'] is int
+              ? DateTime.fromMillisecondsSinceEpoch(map['timestamp'] as int)
+              : DateTime.parse(map['timestamp'].toString()),
     );
   }
 
