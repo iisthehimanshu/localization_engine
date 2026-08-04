@@ -499,11 +499,13 @@ class LocalizationEngine{
       y: pos.smoothY.round(),
       bid: pos.building,
       floor: pos.floor,
-      latitude: double.parse(rank1.properties!.latitude!),
-      longitude: double.parse(rank1.properties!.longitude!),
+      latitude: pos.smoothLat??double.parse(rank1.properties!.latitude!),
+      longitude: pos.smoothLon??double.parse(rank1.properties!.longitude!),
       beacons: [pos.rank1Beacon],
       rssi: pos.rank1Rssi.toDouble(),
       bestFloor: pos.floor,
+      pendingFloor: pos.pendingFloor,
+      timeStamp: DateTime.now()
     );
   }
 

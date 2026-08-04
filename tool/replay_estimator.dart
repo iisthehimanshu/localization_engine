@@ -196,14 +196,22 @@ Future<void> main(List<String> args) async {
   }
 
   // ── 3. Drive the REAL estimator, one tick per second ───────────────────────
-  final est = BLEPositionEstimator(beaconDb: beaconDb); // windowS=6, temp=5, topN=5
+  // The estimator's clock is driven off the tick counter rather than wall time,
+  // so its rolling window and floor dwell timer see the log's own timing. That
+  // makes the replay deterministic and independent of how fast this harness
+  // happens to run — previously readings were restamped DateTime.now() and the
+  // loop had to sleep 1s per tick to keep the window honest.
+  var tick = 0;
+  final est = BLEPositionEstimator(
+    beaconDb: beaconDb,
+    clock: () => t0.add(Duration(seconds: tick)),
+  );
   final samples = <Map<String, dynamic>>[];
 
-  for (var tick = 0; tick <= totalTicks; tick++) {
-    final now = DateTime.now();
+  for (tick = 0; tick <= totalTicks; tick++) {
     final batch = buckets[tick] ?? const <_Reading>[];
     final bleReadings = batch
-        .map((r) => BleReading(name: r.name, rssi: r.rssi, timestamp: now))
+        .map((r) => BleReading(name: r.name, rssi: r.rssi, timestamp: r.ts))
         .toList();
 
     final pos = est.update(bleReadings, walking: true);
@@ -227,13 +235,22 @@ Future<void> main(List<String> args) async {
         'rank1Weight': pos.rank1Weight,
         'jumpPx': pos.jumpPx,
         'nBeacons': pos.nBeacons,
-        'floor': rank1?.floor,
+        // The estimator's own committed floor. This used to report
+        // rank1?.floor — the rank-1 *beacon's* floor — which made the floor
+        // hysteresis invisible in the replay, exactly when you most need to
+        // see it. rank1Floor is kept alongside for cross-checking.
+        'floor': pos.floor,
+        'pendingFloor': pos.pendingFloor,
+        'floorChanged': pos.floorChanged,
+        'floorMargin': pos.floorMargin,
+        'floorConfidence': pos.floorConfidence,
+        'rank1Floor': rank1?.floor,
       },
     });
 
     if (realtime) {
-      // Sleep so the estimator's wall-clock 6s eviction window matches the live
-      // engine's 1s tick cadence exactly.
+      // Purely to make the HTML feel like a live walk while it's being
+      // written; the estimator no longer depends on this sleep for timing.
       await Future.delayed(const Duration(seconds: 1));
     }
   }
@@ -440,7 +457,10 @@ function render(i){
       <div class="kv"><span>readings</span><b>${cur.nReadings}</b></div>
       <div class="kv"><span>smoothed</span><b>${fmt(cur.smoothX)}, ${fmt(cur.smoothY)}</b></div>
       <div class="kv"><span>raw</span><b>${fmt(cur.rawX)}, ${fmt(cur.rawY)}</b></div>
-      <div class="kv"><span>floor</span><b>${cur.floor??'—'}</b></div>
+      <div class="kv"><span>floor</span><b>${cur.floor??'—'}${cur.floorChanged?' ⇦ SWITCHED':''}</b></div>
+      ${cur.pendingFloor!=null?`<div class="kv"><span>pending floor</span><b>→ ${cur.pendingFloor} (holding)</b></div>`:''}
+      <div class="kv"><span>floor margin</span><b class="pill conf-${cur.floorConfidence}">${fmt(cur.floorMargin)} dB</b></div>
+      ${cur.rank1Floor!=cur.floor?`<div class="kv"><span>rank-1 floor</span><b>${cur.rank1Floor??'—'}</b></div>`:''}
       <div class="kv"><span>rank-1</span><b>${cur.rank1}</b></div>
       <div class="kv"><span>rank-1 RSSI</span><b>${cur.rank1Rssi} dBm</b></div>
       <div class="kv"><span>weight</span><b>${fmt(cur.rank1Weight,2)}</b></div>

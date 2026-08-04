@@ -60,7 +60,8 @@ class NearestBeaconResolver {
         longitude: double.parse(beacon.properties!.longitude!),
         beacons: [bestBeacon!],
         rssi: bestAvg > 0 ? -bestAvg : bestAvg,
-        bestFloor: bestFloor??beacon.floor!
+        bestFloor: bestFloor??beacon.floor!,
+        timeStamp: DateTime.now()
       );
     }
 

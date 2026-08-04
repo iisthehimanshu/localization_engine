@@ -63,6 +63,19 @@ class BeaconPointLocation {
   /// Best-floor estimate, which may differ from [floor].
   final bestFloor;
 
+  /// Floor that is currently accumulating evidence to replace [floor], or
+  /// `null` when the floor is settled.
+  ///
+  /// The engine deliberately holds [floor] for a few seconds after a rival
+  /// floor takes the lead, so that beacons from the floor below — which come
+  /// into view well before the user does on a ramp or stairwell — can't flip
+  /// the map underneath them. A non-null value means "a change is in
+  /// progress": pre-load this floor's plan if you like, but keep rendering
+  /// against [floor] until it commits.
+  final int? pendingFloor;
+
+  DateTime timeStamp;
+
   BeaconPointLocation({
     required this.x,
     required this.y,
@@ -72,7 +85,9 @@ class BeaconPointLocation {
     required this.longitude,
     required this.beacons,
     required this.rssi,
-    required this.bestFloor
+    required this.bestFloor,
+    required this.timeStamp,
+    this.pendingFloor,
   });
 
   factory BeaconPointLocation.fromJson(Map<String, dynamic> json) {
@@ -85,7 +100,9 @@ class BeaconPointLocation {
       longitude: (json['longitude'] as num).toDouble(),
       beacons: List<String>.from(json['beacons'] ?? []),
       rssi: json['rssi'],
-      bestFloor: json['bestFloor']
+      bestFloor: json['bestFloor'],
+      pendingFloor: json['pendingFloor'],
+      timeStamp: DateTime.now()
     );
   }
 
@@ -99,7 +116,8 @@ class BeaconPointLocation {
       'longitude': longitude,
       'beacons': beacons,
       'rssi': rssi,
-      'bestFloor':bestFloor
+      'bestFloor':bestFloor,
+      'pendingFloor': pendingFloor
     };
   }
 }
