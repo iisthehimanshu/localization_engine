@@ -1,4 +1,4 @@
-import'dart:async';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -40,15 +40,41 @@ export 'src/network/model/beaconData.dart';
 ///   // handle fused beacon/GPS location
 /// });
 /// ```
-class LocalizationEngine{
+
+/// Selects which native location sources the engine activates.
+enum LocalizationMode { onlyGps, onlyBle, bothGPSandBLE }
+
+class _AdapterSetupResult {
+  const _AdapterSetupResult.success()
+      : success = true,
+        permissionDenied = false,
+        error = null;
+
+  const _AdapterSetupResult.failure(
+    this.error, {
+    this.permissionDenied = false,
+  }) : success = false;
+
+  final bool success;
+  final bool permissionDenied;
+  final String? error;
+}
+
+class LocalizationEngine {
   final MethodChannel _methodChannel = MethodChannel('localization_engine');
   final EventChannel _bleEventChannel = EventChannel('ble_scan_stream');
   final EventChannel _gpsEventChannel = EventChannel('gps_scan_stream');
 
   InitialLocalization? _localization;
+  late String _venueName;
   final _gpsBuffer = GPSBuffer();
 
   bool _isScanning = false;
+  final bool _skipAdapterSetup;
+  final LocalizationMode localizationMode;
+
+  bool get _usesGps => localizationMode != LocalizationMode.onlyBle;
+  bool get _usesBle => localizationMode != LocalizationMode.onlyGps;
 
   /// Whether the engine is currently scanning for beacons and GPS samples.
   bool get isScanning => _isScanning;
@@ -66,7 +92,6 @@ class LocalizationEngine{
   /// `gpsLocation`, and `message` keys, any of which may be `null`.
   Stream<Map<String, dynamic>> get userLocation => _userLocation.stream.map((location) => location.toJson());
   StreamSubscription<LocalizationEngineLocation>? _trackingSubscription;
-  Future<void>? _locationLoopTask;
   int _runId = 0;
   final detector = PeakValleyDetector(historySize: 4);
 
@@ -94,10 +119,22 @@ class LocalizationEngine{
   /// [baseURL] overrides the backend base URL (defaults to the dev/prod URL
   /// based on build mode). [floorConfig] supplies optional per-floor tuning
   /// thresholds; see [LocalizationEngine.floorConfig].
-  LocalizationEngine(String venueName, {String? baseURL, Map<String, Map<int, Map<String, dynamic>>>? floorConfig}){
+  ///
+  /// Set [skipAdapterSetup] only from a headless/background isolate after the
+  /// foreground Activity has already granted permissions and enabled the GPS
+  /// and Bluetooth adapters. It defaults to `false` for normal app usage.
+  /// [localizationMode] controls which adapters, native scanners, and event
+  /// streams are activated. It defaults to GPS and BLE together.
+  LocalizationEngine(
+    String venueName, {
+    String? baseURL,
+    Map<String, Map<int, Map<String, dynamic>>>? floorConfig,
+    bool skipAdapterSetup = false,
+    this.localizationMode = LocalizationMode.bothGPSandBLE,
+  }) : _skipAdapterSetup = skipAdapterSetup {
     LocalizationEngine.floorConfig = floorConfig;
     AppConfig.url = baseURL;
-    init(venueName: venueName);
+    unawaited(init(venueName: venueName));
   }
 
   /// Starts (or re-starts) scanning, the resolution loop, and tracking for
@@ -107,10 +144,11 @@ class LocalizationEngine{
   /// directly. Use [restart] to cleanly re-initialize an existing instance.
   Future<void> init({required String venueName}) async {
     print("init called of localization");
+    _venueName = venueName;
     _runId++;
-    await _startScanning(venueName: venueName);
-    _locationLoopTask = _getCurrentLocation(venueName: venueName, runId: _runId);
-    _trackUserLocation(venueName: venueName);
+    await _startScanning();
+    unawaited(_getCurrentLocation(runId: _runId));
+    unawaited(_trackUserLocation());
   }
 
   static void setFloorConfig(Map<String, Map<int, Map<String, dynamic>>>? updatedFloorConfig){
@@ -142,43 +180,117 @@ class LocalizationEngine{
     await init(venueName: venueName);
   }
 
-  Future<Map<String, dynamic>> _checkAllStatus() async {
-    final result = await AdapterManager.setupAllPermissionsAndAdapters();
-    return result;
+  Future<_AdapterSetupResult> _setupRequiredAdapters() async {
+    if (_skipAdapterSetup) return const _AdapterSetupResult.success();
+
+    try {
+      if (_usesGps) {
+        final gpsResult = await _setupGpsAdapter();
+        if (!gpsResult.success) return gpsResult;
+      }
+      if (_usesBle) {
+        final bleResult = await _setupBleAdapter();
+        if (!bleResult.success) return bleResult;
+      }
+      return const _AdapterSetupResult.success();
+    } catch (error) {
+      return _AdapterSetupResult.failure(
+        'Unexpected error while setting up adapters: $error',
+      );
+    }
   }
 
-  Future<void> _setVenue({required String venueName})async{
-    _localization = InitialLocalization(venueName);
-    _localization?.parseBeaconMap(venueName);
+  Future<_AdapterSetupResult> _setupGpsAdapter() async {
+    final permission = await AdapterManager.requestLocationPermission();
+    if (!permission.isGranted) {
+      return _AdapterSetupResult.failure(
+        permission.isPermanentlyDenied
+            ? 'Location permission permanently denied. Please enable it in settings.'
+            : 'Location permission denied.',
+        permissionDenied: true,
+      );
+    }
+
+    final enabled = await AdapterManager.isGpsEnabled() ||
+        await AdapterManager.promptEnableGps();
+    return enabled
+        ? const _AdapterSetupResult.success()
+        : const _AdapterSetupResult.failure(
+            'GPS not enabled. Please enable location services.',
+          );
   }
 
-  Future<void> _startScanning({
-    required String venueName
-  }) async {
+  Future<_AdapterSetupResult> _setupBleAdapter() async {
+    final permission = await AdapterManager.requestBluetoothPermission();
+    if (!permission.isGranted) {
+      return _AdapterSetupResult.failure(
+        permission.isPermanentlyDenied
+            ? 'Bluetooth permission permanently denied. Please enable it in settings.'
+            : 'Bluetooth permission denied.',
+        permissionDenied: true,
+      );
+    }
+
+    final enabled = await AdapterManager.isBluetoothEnabled() ||
+        await AdapterManager.promptEnableBluetooth();
+    return enabled
+        ? const _AdapterSetupResult.success()
+        : const _AdapterSetupResult.failure(
+            'Bluetooth not enabled. Please enable Bluetooth.',
+          );
+  }
+
+  Future<void> _initializeBleVenue() async {
+    _localization = InitialLocalization(_venueName);
+    await _localization!.parseBeaconMap(_venueName);
+  }
+
+  Future<void> _startScanning() async {
     if (_isScanning) {
       await _stopScanning();
     }
-    var adapterState = await _checkAllStatus();
-    print("adapterState $adapterState");
-    if(adapterState['success']){
-      await _setVenue(venueName: venueName);
-      await _methodChannel.invokeMethod('startGpsScan');
-      await _methodChannel.invokeMethod('startScan');
-      initGpsStream();
-      initBleStream();
-      initEstimatorLocationStream();
+
+    final adapterResult = await _setupRequiredAdapters();
+    if (!adapterResult.success) {
+      final error = adapterResult.error ?? 'Unable to set up required adapters.';
+      if (adapterResult.permissionDenied) {
+        throw PermissionException(error);
+      }
+      throw AdapterException(error);
+    }
+
+    try {
+      if (_usesBle) {
+        await _initializeBleVenue();
+      }
+      if (_usesGps) {
+        await _methodChannel.invokeMethod('startGpsScan');
+        initGpsStream();
+      }
+      if (_usesBle) {
+        await _methodChannel.invokeMethod('startScan');
+        initBleStream();
+        initEstimatorLocationStream();
+      }
       _isScanning = true;
-    }else if(adapterState['PermanentlyDenied'] || adapterState['errors'].first.contains("permission denied")){
-      throw PermissionException(adapterState['errors'].first);
-    }else{
-      throw AdapterException(adapterState['errors'].first);
+    } catch (error, stackTrace) {
+      try {
+        await _stopScanning();
+      } catch (cleanupError) {
+        debugPrint('Failed to clean up after scan startup error: $cleanupError');
+      }
+      Error.throwWithStackTrace(error, stackTrace);
     }
   }
 
   Future<void> _stopScanning() async {
-    await _methodChannel.invokeMethod('stopScan');
-    await _methodChannel.invokeMethod('stopGpsScan');
-    await _stopEstimatorLocationStream();
+    if (_usesBle) {
+      await _methodChannel.invokeMethod('stopScan');
+      await _stopEstimatorLocationStream();
+    }
+    if (_usesGps) {
+      await _methodChannel.invokeMethod('stopGpsScan');
+    }
     await _bleSubscription?.cancel();
     _bleSubscription = null;
     await _gpsSubscription?.cancel();
@@ -309,10 +421,7 @@ class LocalizationEngine{
     });
   }
 
-  Future<void> _getCurrentLocation({
-    required String venueName,
-    required int runId,
-  }) async {
+  Future<void> _getCurrentLocation({required int runId}) async {
 
     // Sliding window / tick length. Every [tickSeconds] we emit a decision
     // based on (up to) the last [windowSeconds] of data.
@@ -328,14 +437,20 @@ class LocalizationEngine{
     // lives in GPSBuffer.)
     final List<MapEntry<DateTime, Map<String, dynamic>>> bleWindow = [];
 
-    // Attach listeners ONCE
-    final bleSubscription = bluetoothScanResults.listen((data) {
-      if (data != null) bleData.add(data);
-    });
+    // Listen only to the data sources enabled by the selected mode. These are
+    // internal broadcast streams; the platform event streams are opened by
+    // initBleStream/initGpsStream during startup.
+    final bleSubscription = _usesBle
+        ? bluetoothScanResults.listen((data) {
+            if (data != null) bleData.add(data);
+          })
+        : null;
 
-    final gpsSubscription = gpsScanResults.listen((data) {
-      if (data != null) gpsData.add(data);
-    });
+    final gpsSubscription = _usesGps
+        ? gpsScanResults.listen((data) {
+            if (data != null) gpsData.add(data);
+          })
+        : null;
 
     Future<void> collectAndEmit() async {
       BeaconPointLocation? beaconLocation;
@@ -351,14 +466,15 @@ class LocalizationEngine{
       gpsData.clear();
 
       try {
-        if (useBLEPositionEstimator) {
+        if (_usesBle) {
+          if (useBLEPositionEstimator) {
           // Estimator keeps its own 6s rolling window — feed only the new
           // readings each tick.
           final scanData = groupByDevice(bleIncrement);
           final filteredData =
               _localization?.filterBeacons(scanData) ?? scanData;
           beaconLocation = _resolveWithEstimator(filteredData);
-        } else {
+          } else {
           // Stateless resolver — feed it the whole 6s sliding BLE window.
           for (final item in bleIncrement) {
             bleWindow.add(MapEntry(now, item));
@@ -372,6 +488,7 @@ class LocalizationEngine{
               _localization?.filterBeacons(scanData) ?? scanData;
           final resolver = NearestBeaconResolver(_localization!);
           beaconLocation = resolver.resolve(filteredData);
+          }
         }
         int? bestFloor = beaconLocation?.bestFloor;
         // if (beaconLocation != null && beaconLocation.rssi != null) {
@@ -396,16 +513,19 @@ class LocalizationEngine{
         //   }
         // }
 
-        for (var data in gpsIncrement) {
-          _gpsBuffer.add(data['latitude'], data['longitude']);
-        }
-        List<double>? gpsBufferLocation = _gpsBuffer
-            .getWindowedRobustPosition(const Duration(seconds: windowSeconds));
-        if (gpsBufferLocation != null && (bestFloor == null || bestFloor == 0)) {
-          gpsLocation = GPSLocation(
-            latitude: gpsBufferLocation[0],
-            longitude: gpsBufferLocation[1],
-          );
+        if (_usesGps) {
+          for (var data in gpsIncrement) {
+            _gpsBuffer.add(data['latitude'], data['longitude']);
+          }
+          List<double>? gpsBufferLocation = _gpsBuffer
+              .getWindowedRobustPosition(const Duration(seconds: windowSeconds));
+          if (gpsBufferLocation != null &&
+              (bestFloor == null || bestFloor == 0)) {
+            gpsLocation = GPSLocation(
+              latitude: gpsBufferLocation[0],
+              longitude: gpsBufferLocation[1],
+            );
+          }
         }
 
         print("adding userLocation in collect&emit");
@@ -416,13 +536,15 @@ class LocalizationEngine{
         ));
 
       } on StateError {
-        List<double>? gpsBufferLocation = _gpsBuffer
-            .getWindowedRobustPosition(const Duration(seconds: windowSeconds));
-        if (gpsBufferLocation != null) {
-          gpsLocation = GPSLocation(
-            latitude: gpsBufferLocation[0],
-            longitude: gpsBufferLocation[1],
-          );
+        if (_usesGps) {
+          List<double>? gpsBufferLocation = _gpsBuffer
+              .getWindowedRobustPosition(const Duration(seconds: windowSeconds));
+          if (gpsBufferLocation != null) {
+            gpsLocation = GPSLocation(
+              latitude: gpsBufferLocation[0],
+              longitude: gpsBufferLocation[1],
+            );
+          }
         }
         _userLocation.add(LocalizationEngineLocation(
           beaconLocation: beaconLocation,
@@ -430,12 +552,12 @@ class LocalizationEngine{
         ));
 
       } on AdapterException {
-        bleSubscription.cancel();
-        // gpsSubscription.cancel();
+        await bleSubscription?.cancel();
+        await gpsSubscription?.cancel();
         rethrow;
       } on PermissionException {
-        bleSubscription.cancel();
-        gpsSubscription.cancel();
+        await bleSubscription?.cancel();
+        await gpsSubscription?.cancel();
         rethrow;
       } catch (e) {
         print("error in collect and emmit $e");
@@ -451,8 +573,8 @@ class LocalizationEngine{
 
       }
 
-      await bleSubscription.cancel();
-      await gpsSubscription.cancel();
+      await bleSubscription?.cancel();
+      await gpsSubscription?.cancel();
   }
 
   /// Resolves an indoor position with [BLEPositionEstimator], mapping its
@@ -581,9 +703,7 @@ class LocalizationEngine{
     return base64UrlEncode(values).substring(0, 22);
   }
 
-  Future<void> _trackUserLocation({
-    required String venueName,
-  }) async {
+  Future<void> _trackUserLocation() async {
     print("_trackUserLocation");
     final deviceId = await _getDeviceId();
     print("_trackUserLocation $deviceId");
@@ -619,7 +739,7 @@ class LocalizationEngine{
               2,
             ],
         },
-        venueName: venueName,
+        venueName: _venueName,
       );
 
       wsService.sendTracking(payload);

@@ -118,22 +118,38 @@ LocalizationEngine(
   String venueName, {
   String? baseURL,
   Map<String, Map<int, Map<String, dynamic>>>? floorConfig,
+  bool skipAdapterSetup = false,
+  LocalizationMode localizationMode = LocalizationMode.bothGPSandBLE,
 })
 ```
 
-| Parameter     | Type                                              | Description                                                                                                              |
-| ------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `venueName`   | `String` (required)                               | Identifier for the venue. Used to fetch the beacon map from the backend and as the building id in tracking payloads.    |
-| `baseURL`     | `String?`                                         | Override the backend base URL. Defaults to `https://dev.iwayplus.in` in debug and `https://maps.iwayplus.in` in release.|
-| `floorConfig` | `Map<String, Map<int, Map<String, dynamic>>>?`    | Per-building, per-floor tuning thresholds (see [Floor Config](#floor-config)).                                          |
+| Parameter          | Type                                           | Description |
+| ------------------ | ---------------------------------------------- | ----------- |
+| `venueName`        | `String` (required)                            | Tracking context for every mode. The beacon map is fetched for this venue only when BLE is enabled. |
+| `baseURL`          | `String?`                                      | Override the backend base URL. Defaults to `https://dev.iwayplus.in` in debug and `https://maps.iwayplus.in` in release. |
+| `floorConfig`      | `Map<String, Map<int, Map<String, dynamic>>>?` | Per-building, per-floor tuning thresholds (see [Floor Config](#floor-config)). |
+| `skipAdapterSetup` | `bool`                                         | Skip permission and adapter prompts when a foreground isolate has already completed setup. Native scans still follow `localizationMode`. |
+| `localizationMode` | `LocalizationMode`                             | Select GPS only, BLE only, or both. Defaults to `bothGPSandBLE`. |
 
 Constructing the engine triggers, in order:
 
-1. Permission + adapter setup via `adapter_manager`.
-2. Venue beacon-map fetch from the backend.
-3. BLE + GPS native scans (method/event channels).
+1. Permission and adapter setup for the sensors selected by `localizationMode`.
+2. Venue beacon-map fetch when BLE is selected.
+3. Native scans and event streams for only the selected sensors.
 4. The location resolution loop.
 5. WebSocket connection for live tracking.
+
+```dart
+final gpsEngine = LocalizationEngine(
+  'IITDelhi',
+  localizationMode: LocalizationMode.onlyGps,
+);
+
+final bleEngine = LocalizationEngine(
+  'IITDelhi',
+  localizationMode: LocalizationMode.onlyBle,
+);
+```
 
 ---
 
