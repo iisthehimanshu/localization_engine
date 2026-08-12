@@ -151,6 +151,33 @@ final bleEngine = LocalizationEngine(
 );
 ```
 
+## Background localization
+
+Use `LocalizationBackgroundService` when localization must continue in an
+Android foreground-service isolate. Permission and adapter prompts are handled
+in the foreground before the service starts, while the background isolate
+restores the persisted venue, mode, base URL, and absolute stop deadline.
+
+```dart
+await LocalizationBackgroundService.start(
+  venueName: 'Iwayplus',
+  baseUrl: 'https://dev.iwayplus.in',
+  mode: LocalizationMode.bothGPSandBLE,
+  duration: const Duration(minutes: 30),
+);
+
+final running = await LocalizationBackgroundService.isRunning;
+final configuration =
+    await LocalizationBackgroundService.activeConfiguration;
+final remaining = await LocalizationBackgroundService.remainingDuration;
+
+await LocalizationBackgroundService.stop();
+```
+
+Omit `duration` to run indefinitely. Zero and negative durations are rejected.
+Calling `stop()` repeatedly is safe, and a repeated `start()` replaces the
+currently running service configuration.
+
 ---
 
 ## API Reference

@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
@@ -20,6 +21,8 @@ import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+
+internal val IWAYPLUS_MANUFACTURER_IDS = listOf(1285, 4336, 2202)
 
 class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
 
@@ -137,6 +140,7 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
   private var isScanning = false
 
   private fun startScanning() {
+    if (isScanning) stopScanning()
     isScanning = true
     startBleScan()
     schedulePeriodicRestart()
@@ -186,7 +190,13 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
       .setReportDelay(0L)
       .build()
 
-    bluetoothLeScanner?.startScan(null, scanSettings, scanCallback)
+    val scanFilters = IWAYPLUS_MANUFACTURER_IDS.map { manufacturerId ->
+      ScanFilter.Builder()
+        .setManufacturerData(manufacturerId, byteArrayOf())
+        .build()
+    }
+
+    bluetoothLeScanner?.startScan(scanFilters, scanSettings, scanCallback)
     Log.d("BLE", "BLE scan started")
 
     timeout?.let {
@@ -222,8 +232,7 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
   }
 
   private fun stopScanning() {
-    if (!isScanning) return
-
+    val wasScanning = isScanning
     isScanning = false
 
     timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
@@ -231,9 +240,10 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
     val bluetoothLeScanner = bluetoothAdapter?.bluetoothLeScanner
     scanCallback?.let { bluetoothLeScanner?.stopScan(it) }
+    scanCallback = null
 
     stopFlush()
-    eventSink?.endOfStream()
+    if (wasScanning) eventSink?.endOfStream()
 
     timeoutRunnable = null
     restartTimerRunnable = null
@@ -300,9 +310,13 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
   }
 
   private fun stopLocationUpdates() {
-    locationManager?.removeUpdates(locationListener)
+    try {
+      locationManager?.removeUpdates(locationListener)
+    } catch (error: SecurityException) {
+      Log.w("GPS", "Unable to remove location updates", error)
+    }
+    locationManager = null
     Log.d("GPS", "Location updates stopped")
-    Log.d("GPS", "Stack trace:", Exception())
   }
 
   // BLE Stream Handler
@@ -327,10 +341,14 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
   }
 
   override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+    stopScanning()
+    stopLocationUpdates()
+
     methodChannel.setMethodCallHandler(null)
     eventChannel.setStreamHandler(null)
     gpsEventChannel.setStreamHandler(null)
-    stopLocationUpdates()
-    stopScanning()
+
+    eventSink = null
+    gpsEventSink = null
   }
 }
