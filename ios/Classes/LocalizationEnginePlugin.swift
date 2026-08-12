@@ -1,40 +1,89 @@
-import Flutter
-import UIKit
 import CoreBluetooth
 import CoreLocation
+import Flutter
+import Foundation
+import UIKit
 
-public class LocalizationEnginePlugin: NSObject,
-                                       FlutterPlugin,
-                                       FlutterStreamHandler,
-                                       CBCentralManagerDelegate,
-                                       CLLocationManagerDelegate {
+public final class LocalizationEnginePlugin: NSObject,
+    FlutterPlugin,
+    FlutterStreamHandler,
+    CBCentralManagerDelegate,
+    CLLocationManagerDelegate {
 
-    // Method and Event Channels
+    private enum LocalizationMode: String {
+        case onlyGps
+        case onlyBle
+        case bothGPSandBLE
+
+        var usesGps: Bool { self != .onlyBle }
+        var usesBle: Bool { self != .onlyGps }
+    }
+
+    private struct SessionConfiguration {
+        var venueName: String
+        var baseUrl: String?
+        var mode: LocalizationMode
+        var stopAt: Date?
+        var gpsActive: Bool
+        var bleActive: Bool
+
+        var isActive: Bool { gpsActive || bleActive }
+
+        init?(dictionary: [String: Any]) {
+            guard
+                let venueName = dictionary["venueName"] as? String,
+                !venueName.isEmpty,
+                let modeName = dictionary["mode"] as? String,
+                let mode = LocalizationMode(rawValue: modeName)
+            else { return nil }
+
+            self.venueName = venueName
+            self.baseUrl = dictionary["baseUrl"] as? String
+            self.mode = mode
+            if let milliseconds = dictionary["stopAt"] as? NSNumber {
+                self.stopAt = Date(
+                    timeIntervalSince1970: milliseconds.doubleValue / 1000.0
+                )
+            } else {
+                self.stopAt = nil
+            }
+            self.gpsActive = dictionary["gpsActive"] as? Bool ?? false
+            self.bleActive = dictionary["bleActive"] as? Bool ?? false
+        }
+
+        var dictionary: [String: Any] {
+            var value: [String: Any] = [
+                "venueName": venueName,
+                "mode": mode.rawValue,
+                "gpsActive": gpsActive,
+                "bleActive": bleActive,
+            ]
+            if let baseUrl = baseUrl { value["baseUrl"] = baseUrl }
+            if let stopAt = stopAt {
+                value["stopAt"] = Int(stopAt.timeIntervalSince1970 * 1000)
+            }
+            return value
+        }
+    }
+
+    private static let sessionDefaultsKey =
+        "localization_engine.ios_background_session"
+    private static let restorationIdentifier =
+        "com.iwayplus.localization_engine.central"
+    private static let iwayplusManufacturerIds: Set<UInt16> = [1285, 4336, 2202]
+
     private var methodChannel: FlutterMethodChannel?
     private var eventChannel: FlutterEventChannel?
     private var gpsEventChannel: FlutterEventChannel?
-
     private var eventSink: FlutterEventSink?
     private var gpsEventSink: FlutterEventSink?
 
-    // BLE Related
     private var centralManager: CBCentralManager!
+    private var locationManager: CLLocationManager!
+    private var sessionConfiguration: SessionConfiguration?
+    private var deadlineTimer: Timer?
     private var isScanning = false
-
-    private var frequency: Int? = nil       // in ms (nil means no periodic emission)
-    private var bufferSize: Int = 5000      // in ms
-    private var timeout: Int? = nil
-    private var immediateEmit: Bool = false // NEW: emit immediately on discovery
-
-    private let restartInterval: TimeInterval = 60.0 // NEW: restart every 60 seconds
-
-    private var scanBuffer: [(timestamp: TimeInterval, rssi: Int, peripheral: CBPeripheral, name: String)] = []
-    private var scanTimer: Timer?
-    private var timeoutTimer: Timer?
-    private var restartTimer: Timer?       // NEW: periodic restart timer
-
-    // GPS Related
-    private var locationManager: CLLocationManager?
+    private var shouldStartGpsAfterAuthorization = false
 
     public static func register(with registrar: FlutterPluginRegistrar) {
         let instance = LocalizationEnginePlugin()
@@ -55,348 +104,384 @@ public class LocalizationEnginePlugin: NSObject,
             name: "gps_scan_stream",
             binaryMessenger: registrar.messenger()
         )
-        instance.gpsEventChannel?.setStreamHandler(GpsStreamHandler(plugin: instance))
+        instance.gpsEventChannel?.setStreamHandler(
+            GpsStreamHandler(plugin: instance)
+        )
 
-        instance.centralManager = CBCentralManager(delegate: instance, queue: nil)
         instance.locationManager = CLLocationManager()
-        instance.locationManager?.delegate = instance
+        instance.locationManager.delegate = instance
+        instance.centralManager = CBCentralManager(
+            delegate: instance,
+            queue: .main,
+            options: [
+                CBCentralManagerOptionRestoreIdentifierKey:
+                    restorationIdentifier,
+                CBCentralManagerOptionShowPowerAlertKey: true,
+            ]
+        )
+        instance.restorePersistedSession()
     }
-
-    // MARK: - Method Call Handling
 
     public func handle(_ call: FlutterMethodCall, result: FlutterResult) {
         switch call.method {
-
         case "initializeScan":
-            let args = call.arguments as? [String: Any]
-            // CHANGED: frequency is now optional (nil if not provided), matching Android behavior
-            if let freq = args?["frequency"] as? Int {
-                frequency = freq
-            } else {
-                frequency = nil
-            }
-            bufferSize = args?["bufferSize"] as? Int ?? 5000
-            timeout = args?["timeout"] as? Int
-            // NEW: read immediateEmit parameter
-            immediateEmit = args?["immediateEmit"] as? Bool ?? false
             result(nil)
-
         case "startScan":
+            guard applyConfiguration(from: call.arguments, enablingBle: true) else {
+                result(
+                    FlutterError(
+                        code: "INVALID_CONFIGURATION",
+                        message: "Missing or invalid localization session configuration.",
+                        details: nil
+                    )
+                )
+                return
+            }
             startScanning()
             result(nil)
-
         case "stopScan":
-            stopScanning()
+            stopScanning(updatePersistence: true)
             result(nil)
-
         case "startGpsScan":
+            guard applyConfiguration(from: call.arguments, enablingGps: true) else {
+                result(
+                    FlutterError(
+                        code: "INVALID_CONFIGURATION",
+                        message: "Missing or invalid localization session configuration.",
+                        details: nil
+                    )
+                )
+                return
+            }
             startLocationUpdates()
             result(nil)
-
         case "stopGpsScan":
-            stopLocationUpdates()
+            stopLocationUpdates(updatePersistence: true)
             result(nil)
-
+        case "stopNativeSession":
+            stopAllNativeSessions()
+            result(nil)
         default:
             result(FlutterMethodNotImplemented)
         }
     }
 
-    // MARK: - BLE Scan Logic
-
-    private func startScanning() {
-        guard !isScanning else { return }
-
-        isScanning = true
-        scanBuffer.removeAll()
-
-        startBleScan()
-        schedulePeriodicRestart() // NEW: schedule 60s restart
-    }
-
-    // NEW: extracted startBleScan so it can be called on restart too
-    private func startBleScan() {
-        if centralManager.state == .poweredOn {
-            centralManager.scanForPeripherals(withServices: nil, options: [
-                CBCentralManagerScanOptionAllowDuplicatesKey: true // Match Android MATCH_NUM_MAX_ADVERTISEMENT
-            ])
-            print("BLE: Started scanning")
-        } else {
-            print("BLE: Bluetooth not powered on")
+    private func applyConfiguration(
+        from arguments: Any?,
+        enablingGps: Bool = false,
+        enablingBle: Bool = false
+    ) -> Bool {
+        var dictionary = sessionConfiguration?.dictionary ?? [:]
+        if let arguments = arguments as? [String: Any] {
+            dictionary.merge(arguments) { _, newValue in newValue }
+        } else if dictionary.isEmpty {
+            dictionary["venueName"] = "standalone"
+            dictionary["mode"] = enablingGps
+                ? LocalizationMode.onlyGps.rawValue
+                : LocalizationMode.onlyBle.rawValue
+        } else if ((enablingGps && sessionConfiguration?.mode == .onlyBle)
+                    || (enablingBle && sessionConfiguration?.mode == .onlyGps)) {
+            dictionary["mode"] = LocalizationMode.bothGPSandBLE.rawValue
         }
+        dictionary["gpsActive"] =
+            (sessionConfiguration?.gpsActive ?? false) || enablingGps
+        dictionary["bleActive"] =
+            (sessionConfiguration?.bleActive ?? false) || enablingBle
 
-        // Only set up periodic emission timer if frequency is set
-        if let frequency = frequency {
-            scanTimer = Timer.scheduledTimer(timeInterval: Double(frequency) / 1000.0,
-                                             target: self,
-                                             selector: #selector(pushScanResults),
-                                             userInfo: nil,
-                                             repeats: true)
+        guard let configuration = SessionConfiguration(dictionary: dictionary)
+        else { return false }
+
+        sessionConfiguration = configuration
+        persistSession()
+        scheduleDeadlineTimer()
+        return !stopIfDeadlineExpired()
+    }
+
+    private func restorePersistedSession() {
+        guard
+            let dictionary = UserDefaults.standard.dictionary(
+                forKey: Self.sessionDefaultsKey
+            ),
+            let configuration = SessionConfiguration(dictionary: dictionary)
+        else { return }
+
+        sessionConfiguration = configuration
+        if stopIfDeadlineExpired() { return }
+        scheduleDeadlineTimer()
+
+        if configuration.gpsActive && configuration.mode.usesGps {
+            startLocationUpdates()
         }
-
-        if let timeout = timeout {
-            timeoutTimer = Timer.scheduledTimer(withTimeInterval: Double(timeout) / 1000.0,
-                                                repeats: false) { [weak self] _ in
-                self?.stopScanning()
-            }
-        }
-    }
-
-    // NEW: periodic restart every 60 seconds, mirrors Android schedulePeriodicRestart()
-    private func schedulePeriodicRestart() {
-        restartTimer = Timer.scheduledTimer(timeInterval: restartInterval,
-                                            target: self,
-                                            selector: #selector(handlePeriodicRestart),
-                                            userInfo: nil,
-                                            repeats: true)
-        print("BLE: Scheduled periodic BLE scan restart every \(restartInterval)s")
-    }
-
-    @objc private func handlePeriodicRestart() {
-        guard isScanning else { return }
-
-        print("BLE: Restarting BLE scan (periodic 60s restart)")
-
-        // Stop current scan and timer
-        centralManager.stopScan()
-        scanTimer?.invalidate()
-        scanTimer = nil
-
-        // Small delay before restarting
-       DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-               guard let strongSelf = self else { return }
-               guard strongSelf.isScanning else { return }
-               strongSelf.startBleScan()
-           }
-    }
-
-    private func stopScanning() {
-        guard isScanning else { return }
-
-        isScanning = false
-
-        // Invalidate all timers first
-        scanTimer?.invalidate()
-        scanTimer = nil
-        timeoutTimer?.invalidate()
-        timeoutTimer = nil
-        restartTimer?.invalidate()   // NEW: cancel restart timer
-        restartTimer = nil
-
-        centralManager.stopScan()
-        scanBuffer.removeAll()
-        eventSink?(FlutterEndOfEventStream)
-
-        print("BLE: Scanning stopped completely")
-    }
-
-    // MARK: - CBCentral Delegate
-
-    public func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        switch central.state {
-        case .poweredOn:
-            print("BLE: Bluetooth is powered on")
-        case .poweredOff:
-            print("BLE: Bluetooth is powered off")
-            // NEW: stop scanning if bluetooth turns off mid-scan, mirrors Android bluetooth-off check
-            if isScanning {
-                print("BLE: Bluetooth turned off during scan - stopping")
-                stopScanning()
-            }
-        case .unauthorized:
-            print("BLE: Bluetooth is unauthorized")
-        case .unsupported:
-            print("BLE: Bluetooth is unsupported")
-        default:
-            print("BLE: Bluetooth state changed")
+        if configuration.bleActive && configuration.mode.usesBle {
+            isScanning = true
+            startBleScanIfReady()
         }
     }
 
-    public func centralManager(_ central: CBCentralManager,
-                               didDiscover peripheral: CBPeripheral,
-                               advertisementData: [String : Any],
-                               rssi RSSI: NSNumber) {
-
-        guard isScanning else { return }
-
-        let name = peripheral.name ?? (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? ""
-        guard name.lowercased().hasPrefix("iw") else { return }
-
-        let timestamp = Date().timeIntervalSince1970 * 1000 // ms
-
-        // NEW: immediateEmit - emit right away on discovery with formatted date string
-        if immediateEmit {
-            let dateTime = formattedDateTime(from: timestamp)
-            let resultMap: [String: Any] = [
-                "device": peripheral.identifier.uuidString,
-                "name": name,
-                "rssi": RSSI.intValue,
-                "timestamp": dateTime
-            ]
-            eventSink?([resultMap])
-        }
-
-        // Buffer if frequency is set
-        if frequency != nil {
-            scanBuffer.append((timestamp, RSSI.intValue, peripheral, name))
-            let minTimestamp = timestamp - Double(bufferSize)
-            scanBuffer.removeAll { $0.timestamp < minTimestamp }
-        } else if !immediateEmit {
-            // NEW: legacy behavior - if no frequency and no immediateEmit, emit immediately
-            let dateTime = formattedDateTime(from: timestamp)
-            let resultMap: [String: Any] = [
-                "device": peripheral.identifier.uuidString,
-                "name": name,
-                "rssi": RSSI.intValue,
-                "timestamp": dateTime
-            ]
-            eventSink?([resultMap])
-        }
-    }
-
-    // NEW: helper to format timestamp as "yyyy-MM-dd HH:mm:ss.SSS", matching Android
-    private func formattedDateTime(from milliseconds: TimeInterval) -> String {
-        let date = Date(timeIntervalSince1970: milliseconds / 1000.0)
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
-        formatter.locale = Locale.current
-        return formatter.string(from: date)
-    }
-
-    // MARK: - Push Buffer to Flutter
-
-    @objc private func pushScanResults() {
-        guard isScanning else { return }
-
-        // NEW: check if Bluetooth is still on before emitting, mirrors Android bluetooth-off check
-        guard centralManager.state == .poweredOn else {
-            print("BLE: Bluetooth is OFF during periodic push - stopping scan")
-            stopScanning()
+    private func persistSession() {
+        guard let configuration = sessionConfiguration, configuration.isActive else {
+            clearPersistedSession()
             return
         }
-
-        guard let sink = eventSink else { return }
-
-        let mapped = scanBuffer.map {
-            [
-                "device": $0.peripheral.identifier.uuidString,
-                "name": $0.name,
-                "rssi": $0.rssi,
-                "timestamp": Int($0.timestamp)
-            ] as [String: Any]
-        }
-
-        print("BLE: Pushing \(mapped.count) results to stream")
-        sink(mapped)
+        UserDefaults.standard.set(
+            configuration.dictionary,
+            forKey: Self.sessionDefaultsKey
+        )
     }
 
-    // MARK: - GPS Location Methods (unchanged)
+    private func clearPersistedSession() {
+        UserDefaults.standard.removeObject(forKey: Self.sessionDefaultsKey)
+        if sessionConfiguration?.isActive == false {
+            sessionConfiguration = nil
+        }
+    }
+
+    private func scheduleDeadlineTimer() {
+        deadlineTimer?.invalidate()
+        deadlineTimer = nil
+        guard let stopAt = sessionConfiguration?.stopAt else { return }
+
+        let remaining = stopAt.timeIntervalSinceNow
+        if remaining <= 0 {
+            stopAllNativeSessions()
+            return
+        }
+        deadlineTimer = Timer.scheduledTimer(
+            withTimeInterval: remaining,
+            repeats: false
+        ) { [weak self] _ in
+            self?.stopAllNativeSessions()
+        }
+    }
+
+    @discardableResult
+    private func stopIfDeadlineExpired() -> Bool {
+        guard let stopAt = sessionConfiguration?.stopAt else { return false }
+        guard stopAt <= Date() else { return false }
+        stopAllNativeSessions()
+        return true
+    }
+
+    private func stopAllNativeSessions() {
+        deadlineTimer?.invalidate()
+        deadlineTimer = nil
+        stopScanning(updatePersistence: false)
+        stopLocationUpdates(updatePersistence: false)
+        sessionConfiguration = nil
+        clearPersistedSession()
+    }
+
+    // MARK: - BLE
+
+    private func startScanning() {
+        guard !stopIfDeadlineExpired() else { return }
+        guard sessionConfiguration?.mode.usesBle == true else { return }
+        isScanning = true
+        startBleScanIfReady()
+    }
+
+    private func startBleScanIfReady() {
+        guard isScanning, centralManager.state == .poweredOn else { return }
+        centralManager.scanForPeripherals(
+            withServices: nil,
+            options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]
+        )
+    }
+
+    private func stopScanning(updatePersistence: Bool) {
+        isScanning = false
+        centralManager?.stopScan()
+        if updatePersistence, sessionConfiguration != nil {
+            sessionConfiguration?.bleActive = false
+            persistSession()
+        }
+    }
+
+    public func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        if central.state == .poweredOn {
+            startBleScanIfReady()
+        } else if central.state == .poweredOff {
+            central.stopScan()
+        }
+    }
+
+    public func centralManager(
+        _ central: CBCentralManager,
+        willRestoreState dict: [String: Any]
+    ) {
+        guard
+            let configuration = sessionConfiguration,
+            configuration.bleActive,
+            configuration.mode.usesBle,
+            !stopIfDeadlineExpired()
+        else { return }
+
+        isScanning = true
+        startBleScanIfReady()
+    }
+
+    public func centralManager(
+        _ central: CBCentralManager,
+        didDiscover peripheral: CBPeripheral,
+        advertisementData: [String: Any],
+        rssi RSSI: NSNumber
+    ) {
+        guard isScanning, !stopIfDeadlineExpired() else { return }
+        guard
+            let manufacturerData =
+                advertisementData[CBAdvertisementDataManufacturerDataKey]
+                    as? Data,
+            let manufacturerId = manufacturerId(from: manufacturerData),
+            Self.iwayplusManufacturerIds.contains(manufacturerId)
+        else { return }
+
+        let name = peripheral.name
+            ?? advertisementData[CBAdvertisementDataLocalNameKey] as? String
+            ?? ""
+        guard name.lowercased().hasPrefix("iw") else { return }
+
+        let payload = manufacturerData.dropFirst(2)
+        let event: [String: Any] = [
+            "device": peripheral.identifier.uuidString,
+            "name": name,
+            "rssi": RSSI.intValue,
+            "timestamp": Int(Date().timeIntervalSince1970 * 1000),
+            "manufacturerHex": payload.map { String(format: "%02X", $0) }
+                .joined(),
+        ]
+        eventSink?([event])
+    }
+
+    private func manufacturerId(from data: Data) -> UInt16? {
+        guard data.count >= 2 else { return nil }
+        return UInt16(data[data.startIndex])
+            | (UInt16(data[data.index(after: data.startIndex)]) << 8)
+    }
+
+    // MARK: - Core Location
 
     private func startLocationUpdates() {
-        guard let locationManager = locationManager else { return }
-        print("GPS: Initializing location updates")
+        guard !stopIfDeadlineExpired() else { return }
+        guard sessionConfiguration?.mode.usesGps == true else { return }
 
-        let authStatus: CLAuthorizationStatus
-        if #available(iOS 14.0, *) {
-            authStatus = locationManager.authorizationStatus
-        } else {
-            authStatus = CLLocationManager.authorizationStatus()
-        }
-
-        switch authStatus {
+        switch locationManager.authorizationStatus {
         case .notDetermined:
+            shouldStartGpsAfterAuthorization = true
             locationManager.requestWhenInUseAuthorization()
             return
         case .restricted, .denied:
-            print("GPS: Permission denied")
-            gpsEventSink?(FlutterError(code: "PERMISSION_DENIED",
-                                       message: "Location permission not granted",
-                                       details: nil))
+            gpsEventSink?(
+                FlutterError(
+                    code: "PERMISSION_DENIED",
+                    message: "Location permission not granted.",
+                    details: nil
+                )
+            )
             return
         case .authorizedWhenInUse, .authorizedAlways:
             break
         @unknown default:
-            break
+            return
         }
 
-        // AFTER (matches Android's 1000ms cadence)
-        locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation  // forces ~1s GPS chipset rate
+        locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+        locationManager.distanceFilter = kCLDistanceFilterNone
+        locationManager.activityType = .otherNavigation
         locationManager.pausesLocationUpdatesAutomatically = false
-        locationManager.distanceFilter = kCLDistanceFilterNone                  // fire on any movement
-        locationManager.activityType = .otherNavigation                         // disables iOS dead-reckoning / motion coalescing
+
+        let backgroundModes =
+            Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes")
+                as? [String] ?? []
+        if backgroundModes.contains("location") {
+            locationManager.allowsBackgroundLocationUpdates = true
+            locationManager.showsBackgroundLocationIndicator = true
+        }
+
         locationManager.startUpdatingLocation()
-        print("GPS: Location updates started")
+        if locationManager.authorizationStatus == .authorizedAlways,
+           CLLocationManager.significantLocationChangeMonitoringAvailable() {
+            locationManager.startMonitoringSignificantLocationChanges()
+        }
     }
 
-    private func stopLocationUpdates() {
-        print("GPS: Location updates stopped")
-
-        print("----- CALL STACK -----")
-        Thread.callStackSymbols.forEach { print($0) }
-        print("----------------------")
-
+    private func stopLocationUpdates(updatePersistence: Bool) {
+        shouldStartGpsAfterAuthorization = false
         locationManager?.stopUpdatingLocation()
+        locationManager?.stopMonitoringSignificantLocationChanges()
+        if updatePersistence, sessionConfiguration != nil {
+            sessionConfiguration?.gpsActive = false
+            persistSession()
+        }
     }
 
-    public func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let location = locations.last else { return }
-
-        let data: [String: Any] = [
+    public func locationManager(
+        _ manager: CLLocationManager,
+        didUpdateLocations locations: [CLLocation]
+    ) {
+        guard !stopIfDeadlineExpired(), let location = locations.last else {
+            return
+        }
+        gpsEventSink?([
             "latitude": location.coordinate.latitude,
             "longitude": location.coordinate.longitude,
             "accuracy": location.horizontalAccuracy,
             "bearing": location.course,
             "altitude": location.altitude,
             "speed": location.speed,
-            "timestamp": Int(location.timestamp.timeIntervalSince1970 * 1000)
-        ]
-        gpsEventSink?(data)
+            "timestamp": Int(location.timestamp.timeIntervalSince1970 * 1000),
+        ])
     }
 
-    public func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        print("GPS: Location error - \(error.localizedDescription)")
-        gpsEventSink?(FlutterError(code: "LOCATION_ERROR",
-                                   message: error.localizedDescription,
-                                   details: nil))
+    public func locationManager(
+        _ manager: CLLocationManager,
+        didFailWithError error: Error
+    ) {
+        gpsEventSink?(
+            FlutterError(
+                code: "LOCATION_ERROR",
+                message: error.localizedDescription,
+                details: nil
+            )
+        )
     }
 
-    public func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
-        print("GPS: Authorization status changed to \(status.rawValue)")
-        if status == .authorizedWhenInUse || status == .authorizedAlways {
-            if locationManager?.location != nil {
-                startLocationUpdates()
-            }
+    public func locationManagerDidChangeAuthorization(
+        _ manager: CLLocationManager
+    ) {
+        if shouldStartGpsAfterAuthorization,
+           (manager.authorizationStatus == .authorizedWhenInUse
+            || manager.authorizationStatus == .authorizedAlways) {
+            shouldStartGpsAfterAuthorization = false
+            startLocationUpdates()
         }
     }
 
-    @available(iOS 14.0, *)
-    public func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        locationManager(manager, didChangeAuthorization: manager.authorizationStatus)
-    }
+    // MARK: - Event channels
 
-    // MARK: - BLE Event Channel Stream Handler
-
-    public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+    public func onListen(
+        withArguments arguments: Any?,
+        eventSink events: @escaping FlutterEventSink
+    ) -> FlutterError? {
         eventSink = events
         return nil
     }
 
     public func onCancel(withArguments arguments: Any?) -> FlutterError? {
         eventSink = nil
-        stopScanning()
         return nil
     }
 
-    // MARK: - GPS Stream Handler
-
-    class GpsStreamHandler: NSObject, FlutterStreamHandler {
+    private final class GpsStreamHandler: NSObject, FlutterStreamHandler {
         weak var plugin: LocalizationEnginePlugin?
 
         init(plugin: LocalizationEnginePlugin) {
             self.plugin = plugin
         }
 
-        func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+        func onListen(
+            withArguments arguments: Any?,
+            eventSink events: @escaping FlutterEventSink
+        ) -> FlutterError? {
             plugin?.gpsEventSink = events
             return nil
         }

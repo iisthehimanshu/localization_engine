@@ -178,6 +178,16 @@ Omit `duration` to run indefinitely. Zero and negative durations are rejected.
 Calling `stop()` repeatedly is safe, and a repeated `start()` replaces the
 currently running service configuration.
 
+### iOS host configuration
+
+An iOS host must enable the **Location updates**, **Uses Bluetooth LE
+accessories**, and **Background fetch** background modes and provide location
+and Bluetooth usage descriptions. The bundled example contains the required
+`Info.plist` entries. GPS uses native Core Location background delivery; BLE
+uses Core Bluetooth state restoration and best-effort background discovery.
+iOS controls BLE discovery frequency and does not relaunch an app after the
+user explicitly force-quits it.
+
 ---
 
 ## API Reference

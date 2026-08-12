@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:ui';
 
 import 'package:adapter_manager/adapter_manager.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -16,8 +18,10 @@ const _stopEvent = 'localization_background_service.stop';
 const _notificationId = 4815;
 
 LocalizationEngine? _backgroundEngine;
+LocalizationEngine? _iosForegroundEngine;
 Timer? _backgroundStopTimer;
 bool _backgroundStopInProgress = false;
+const _localizationMethodChannel = MethodChannel('localization_engine');
 
 /// Owns the foreground-service lifecycle for background localization.
 class LocalizationBackgroundService {
@@ -56,6 +60,17 @@ class LocalizationBackgroundService {
     );
     await _writeConfiguration(configuration);
 
+    if (Platform.isIOS) {
+      _iosForegroundEngine = LocalizationEngine(
+        configuration.venueName,
+        baseURL: configuration.baseUrl,
+        localizationMode: configuration.mode,
+        skipAdapterSetup: true,
+        stopAt: configuration.stopAt,
+      );
+      return;
+    }
+
     final service = FlutterBackgroundService();
     final configured = await service.configure(
       androidConfiguration: AndroidConfiguration(
@@ -92,6 +107,24 @@ class LocalizationBackgroundService {
   }
 
   static Future<void> stop() async {
+    if (Platform.isIOS) {
+      final engine = _iosForegroundEngine;
+      _iosForegroundEngine = null;
+      if (engine != null) {
+        await engine.dispose();
+      } else {
+        try {
+          await _localizationMethodChannel.invokeMethod<void>(
+            'stopNativeSession',
+          );
+        } on MissingPluginException {
+          // The plugin may not be registered during process teardown.
+        }
+      }
+      await _clearConfiguration();
+      return;
+    }
+
     await _clearConfiguration();
     final service = FlutterBackgroundService();
     if (!await service.isRunning()) return;
@@ -100,10 +133,45 @@ class LocalizationBackgroundService {
     await _waitUntilStopped(service);
   }
 
-  static Future<bool> get isRunning => FlutterBackgroundService().isRunning();
+  static Future<bool> get isRunning async {
+    if (!Platform.isIOS) return FlutterBackgroundService().isRunning();
+    final configuration = await activeConfiguration;
+    return configuration != null;
+  }
 
-  static Future<LocalizationServiceConfiguration?> get activeConfiguration =>
-      _readConfiguration();
+  static Future<LocalizationServiceConfiguration?>
+      get activeConfiguration async {
+    final configuration = await _readConfiguration();
+    final stopAt = configuration?.stopAt;
+    if (stopAt != null && stopAt.isBefore(DateTime.now())) {
+      await _clearConfiguration();
+      if (Platform.isIOS) {
+        try {
+          await _localizationMethodChannel.invokeMethod<void>(
+            'stopNativeSession',
+          );
+        } on MissingPluginException {
+          // Native restoration will enforce the same absolute deadline.
+        }
+      }
+      return null;
+    }
+    if (Platform.isIOS &&
+        configuration != null &&
+        _iosForegroundEngine == null) {
+      // Recreate the Dart pipeline after an iOS relaunch. The native plugin
+      // has already restored Core Location/Core Bluetooth from UserDefaults;
+      // these idempotent start calls reattach event streams and CMS tracking.
+      _iosForegroundEngine = LocalizationEngine(
+        configuration.venueName,
+        baseURL: configuration.baseUrl,
+        localizationMode: configuration.mode,
+        skipAdapterSetup: true,
+        stopAt: configuration.stopAt,
+      );
+    }
+    return configuration;
+  }
 
   static Future<LocalizationMode?> get activeMode async =>
       (await activeConfiguration)?.mode;
@@ -135,14 +203,25 @@ class LocalizationBackgroundService {
 /// Call this from a foreground isolate because it may display system dialogs.
 Future<void> prepareLocalizationAdapters(LocalizationMode mode) async {
   // Android BLE scanning can still require location permission depending on
-  // OS/target version, but BLE-only mode must not enable the GPS adapter.
-  final locationPermission = await AdapterManager.requestLocationPermission();
-  if (!locationPermission.isGranted) {
-    throw AdapterException(
-      locationPermission.isPermanentlyDenied
-          ? 'Location permission permanently denied. Please enable it in settings.'
-          : 'Location permission denied.',
-    );
+  // OS/target version. iOS BLE-only sessions do not require location access.
+  final needsLocationPermission =
+      !Platform.isIOS || mode != LocalizationMode.onlyBle;
+  if (needsLocationPermission) {
+    final locationPermission = await AdapterManager.requestLocationPermission();
+    if (!locationPermission.isGranted) {
+      throw AdapterException(
+        locationPermission.isPermanentlyDenied
+            ? 'Location permission permanently denied. Please enable it in settings.'
+            : 'Location permission denied.',
+      );
+    }
+
+    if (Platform.isIOS && mode != LocalizationMode.onlyBle) {
+      // Always authorization enables Core Location to relaunch the app for
+      // significant changes. The user can decline the upgrade; When In Use
+      // still supports an active background session with the iOS indicator.
+      await AdapterManager.requestLocationAlwaysPermission();
+    }
   }
 
   if (mode != LocalizationMode.onlyBle) {
@@ -189,7 +268,9 @@ Future<void> localizationBackgroundServiceOnStart(
 Future<bool> localizationIosBackground(ServiceInstance service) async {
   WidgetsFlutterBinding.ensureInitialized();
   DartPluginRegistrant.ensureInitialized();
-  await _runBackgroundService(service);
+  // Core Location and Core Bluetooth restore their native session when iOS
+  // wakes the app. A short background-fetch isolate must not create a second
+  // localization engine or Bluetooth central manager.
   return true;
 }
 
@@ -217,6 +298,7 @@ Future<void> _runBackgroundService(ServiceInstance service) async {
     baseURL: configuration.baseUrl,
     localizationMode: configuration.mode,
     skipAdapterSetup: true,
+    stopAt: configuration.stopAt,
   );
 }
 

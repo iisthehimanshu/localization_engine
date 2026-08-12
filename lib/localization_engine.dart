@@ -74,6 +74,8 @@ class LocalizationEngine {
   bool _isDisposed = false;
   final bool _skipAdapterSetup;
   final LocalizationMode localizationMode;
+  final DateTime? stopAt;
+  final String? _baseURL;
 
   bool get _usesGps => localizationMode != LocalizationMode.onlyBle;
   bool get _usesBle => localizationMode != LocalizationMode.onlyGps;
@@ -136,7 +138,9 @@ class LocalizationEngine {
     Map<String, Map<int, Map<String, dynamic>>>? floorConfig,
     bool skipAdapterSetup = false,
     this.localizationMode = LocalizationMode.bothGPSandBLE,
-  }) : _skipAdapterSetup = skipAdapterSetup {
+    this.stopAt,
+  })  : _skipAdapterSetup = skipAdapterSetup,
+        _baseURL = baseURL {
     LocalizationEngine.floorConfig = floorConfig;
     AppConfig.url = baseURL;
     unawaited(init(venueName: venueName));
@@ -288,7 +292,10 @@ class LocalizationEngine {
         if (_isDisposed) return;
       }
       if (_usesGps) {
-        await _methodChannel.invokeMethod('startGpsScan');
+        await _methodChannel.invokeMethod(
+          'startGpsScan',
+          _nativeSessionConfiguration,
+        );
         if (_isDisposed) {
           await _methodChannel.invokeMethod<void>('stopGpsScan');
           return;
@@ -296,7 +303,10 @@ class LocalizationEngine {
         initGpsStream();
       }
       if (_usesBle) {
-        await _methodChannel.invokeMethod('startScan');
+        await _methodChannel.invokeMethod(
+          'startScan',
+          _nativeSessionConfiguration,
+        );
         if (_isDisposed) {
           await _methodChannel.invokeMethod<void>('stopScan');
           return;
@@ -315,6 +325,13 @@ class LocalizationEngine {
       Error.throwWithStackTrace(error, stackTrace);
     }
   }
+
+  Map<String, Object?> get _nativeSessionConfiguration => <String, Object?>{
+        'venueName': _venueName,
+        'baseUrl': _baseURL,
+        'mode': localizationMode.name,
+        'stopAt': stopAt?.millisecondsSinceEpoch,
+      };
 
   Future<void> _stopScanning() async {
     if (_usesBle) {

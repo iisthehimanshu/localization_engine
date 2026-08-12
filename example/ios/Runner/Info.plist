@@ -26,8 +26,13 @@
     <string>We need location access to localise user to nearest building on our map</string>
     <key>NSLocationUsageDescription</key>
     <string>This app needs access to location when in the foreground.</string>
-    <key>NSLocationWhenInUseUsageDescription</key>
+	<key>NSLocationWhenInUseUsageDescription</key>
     <string>We need location access to localise user to nearest building on our map</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>bluetooth-central</string>
+	</array>
 	<key>CFBundleShortVersionString</key>
 	<string>$(FLUTTER_BUILD_NAME)</string>
 	<key>CFBundleSignature</key>
