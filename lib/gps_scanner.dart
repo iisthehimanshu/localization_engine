@@ -8,8 +8,7 @@ import 'location.dart';
 class GpsScanner {
   static const MethodChannel _methodChannel =
       MethodChannel('localization_engine');
-  static const EventChannel _gpsEventChannel =
-      EventChannel('gps_scan_stream');
+  static const EventChannel _gpsEventChannel = EventChannel('gps_scan_stream');
 
   final GPSBuffer _buffer = GPSBuffer();
   StreamSubscription<dynamic>? _subscription;
@@ -21,7 +20,18 @@ class GpsScanner {
     _subscription = _gpsEventChannel.receiveBroadcastStream().listen(
       (data) {
         final map = Map<String, dynamic>.from(data as Map);
-        _buffer.add(map['latitude'] as double, map['longitude'] as double);
+        final rawTimestamp = map['timestamp'];
+        _buffer.addSample(GpsSample(
+          latitude: (map['latitude'] as num).toDouble(),
+          longitude: (map['longitude'] as num).toDouble(),
+          timestamp: rawTimestamp is num
+              ? DateTime.fromMillisecondsSinceEpoch(rawTimestamp.toInt())
+              : DateTime.now(),
+          accuracy: (map['accuracy'] as num?)?.toDouble(),
+          speed: (map['speed'] as num?)?.toDouble(),
+          bearing: (map['bearing'] as num?)?.toDouble(),
+          altitude: (map['altitude'] as num?)?.toDouble(),
+        ));
       },
       onError: (Object error) => print('GPS stream error: $error'),
     );
@@ -35,15 +45,22 @@ class GpsScanner {
 
   /// Returns a robust GPS position from the buffer, or null if unavailable.
   GPSLocation? get currentLocation {
-    final pos = _buffer.getRobustPosition();
-    if (pos == null || pos.isEmpty) return null;
-    return GPSLocation(latitude: pos[0], longitude: pos[1]);
+    final estimate = _buffer.getRobustEstimate();
+    if (estimate == null) return null;
+    _buffer.clear();
+    return GPSLocation(
+      latitude: estimate.latitude,
+      longitude: estimate.longitude,
+      accuracy: estimate.accuracy,
+      sampleCount: estimate.sampleCount,
+      confidence: estimate.confidence,
+      timeStamp: estimate.timestamp,
+    );
   }
 
-  Stream<Map<String, dynamic>> get rawStream =>
-      _gpsEventChannel
-          .receiveBroadcastStream()
-          .cast<Map<dynamic, dynamic>>()
-          .map((e) => Map<String, dynamic>.from(e))
-          .handleError((Object error) => print('gpsStreamRaw error: $error'));
+  Stream<Map<String, dynamic>> get rawStream => _gpsEventChannel
+      .receiveBroadcastStream()
+      .cast<Map<dynamic, dynamic>>()
+      .map((e) => Map<String, dynamic>.from(e))
+      .handleError((Object error) => print('gpsStreamRaw error: $error'));
 }

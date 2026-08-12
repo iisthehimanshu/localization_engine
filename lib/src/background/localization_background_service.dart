@@ -10,6 +10,7 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../localization_engine.dart' show LocalizationEngine;
+import '../localizationAlgorithm/ble_position_estimator.dart';
 import '../localization_mode.dart';
 import 'localization_service_configuration.dart';
 
@@ -32,6 +33,11 @@ class LocalizationBackgroundService {
     String? baseUrl,
     LocalizationMode mode = LocalizationMode.bothGPSandBLE,
     Duration? duration,
+    Map<String, BeaconSignalCalibration> beaconCalibrations =
+        const <String, BeaconSignalCalibration>{},
+    Map<String, double> pixelsPerMeterByFloor = const <String, double>{},
+    Map<String, FloorGeoTransform> geoTransformsByFloor =
+        const <String, FloorGeoTransform>{},
   }) async {
     final normalizedVenueName = venueName.trim();
     if (normalizedVenueName.isEmpty) {
@@ -57,6 +63,9 @@ class LocalizationBackgroundService {
       baseUrl: baseUrl,
       mode: mode,
       stopAt: duration == null ? null : DateTime.now().add(duration),
+      beaconCalibrations: beaconCalibrations,
+      pixelsPerMeterByFloor: pixelsPerMeterByFloor,
+      geoTransformsByFloor: geoTransformsByFloor,
     );
     await _writeConfiguration(configuration);
 
@@ -67,6 +76,9 @@ class LocalizationBackgroundService {
         localizationMode: configuration.mode,
         skipAdapterSetup: true,
         stopAt: configuration.stopAt,
+        beaconCalibrations: configuration.beaconCalibrations,
+        pixelsPerMeterByFloor: configuration.pixelsPerMeterByFloor,
+        geoTransformsByFloor: configuration.geoTransformsByFloor,
       );
       return;
     }
@@ -168,6 +180,9 @@ class LocalizationBackgroundService {
         localizationMode: configuration.mode,
         skipAdapterSetup: true,
         stopAt: configuration.stopAt,
+        beaconCalibrations: configuration.beaconCalibrations,
+        pixelsPerMeterByFloor: configuration.pixelsPerMeterByFloor,
+        geoTransformsByFloor: configuration.geoTransformsByFloor,
       );
     }
     return configuration;
@@ -299,6 +314,9 @@ Future<void> _runBackgroundService(ServiceInstance service) async {
     localizationMode: configuration.mode,
     skipAdapterSetup: true,
     stopAt: configuration.stopAt,
+    beaconCalibrations: configuration.beaconCalibrations,
+    pixelsPerMeterByFloor: configuration.pixelsPerMeterByFloor,
+    geoTransformsByFloor: configuration.geoTransformsByFloor,
   );
 }
 

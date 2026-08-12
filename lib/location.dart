@@ -13,10 +13,18 @@ class LocalizationEngineLocation {
   /// Optional status or diagnostic message.
   final String? msg;
 
+  /// Source the engine currently considers the most trustworthy.
+  final String? primarySource;
+
+  /// Overall quality label for [primarySource]: high, medium, or low.
+  final String? confidence;
+
   LocalizationEngineLocation({
     required this.beaconLocation,
     required this.gpsLocation,
     this.msg,
+    this.primarySource,
+    this.confidence,
   });
 
   factory LocalizationEngineLocation.fromJson(Map<String, dynamic> json) {
@@ -28,6 +36,8 @@ class LocalizationEngineLocation {
           ? GPSLocation.fromJson(json['gpsLocation'])
           : null,
       msg: json['message'],
+      primarySource: json['primarySource'],
+      confidence: json['confidence'],
     );
   }
 
@@ -36,6 +46,8 @@ class LocalizationEngineLocation {
       'beaconLocation': beaconLocation?.toJson(),
       'gpsLocation': gpsLocation?.toJson(),
       'message': msg,
+      'primarySource': primarySource,
+      'confidence': confidence,
     };
   }
 }
@@ -74,6 +86,17 @@ class BeaconPointLocation {
   /// against [floor] until it commits.
   final int? pendingFloor;
 
+  /// Overall estimator quality and the evidence behind it.
+  final String? confidence;
+  final String? floorConfidence;
+  final double? floorMargin;
+  final double? rank1Weight;
+  final int? beaconCount;
+  final String? motionState;
+  final double? rawX;
+  final double? rawY;
+  final double? jumpPixels;
+
   DateTime timeStamp;
 
   BeaconPointLocation({
@@ -88,22 +111,39 @@ class BeaconPointLocation {
     required this.bestFloor,
     required this.timeStamp,
     this.pendingFloor,
+    this.confidence,
+    this.floorConfidence,
+    this.floorMargin,
+    this.rank1Weight,
+    this.beaconCount,
+    this.motionState,
+    this.rawX,
+    this.rawY,
+    this.jumpPixels,
   });
 
   factory BeaconPointLocation.fromJson(Map<String, dynamic> json) {
     return BeaconPointLocation(
-      x: json['x'],
-      y: json['y'],
-      bid: json['bid'],
-      floor: json['floor'],
-      latitude: (json['latitude'] as num).toDouble(),
-      longitude: (json['longitude'] as num).toDouble(),
-      beacons: List<String>.from(json['beacons'] ?? []),
-      rssi: json['rssi'],
-      bestFloor: json['bestFloor'],
-      pendingFloor: json['pendingFloor'],
-      timeStamp: DateTime.now()
-    );
+        x: json['x'],
+        y: json['y'],
+        bid: json['bid'],
+        floor: json['floor'],
+        latitude: (json['latitude'] as num).toDouble(),
+        longitude: (json['longitude'] as num).toDouble(),
+        beacons: List<String>.from(json['beacons'] ?? []),
+        rssi: json['rssi'],
+        bestFloor: json['bestFloor'],
+        pendingFloor: json['pendingFloor'],
+        confidence: json['confidence'],
+        floorConfidence: json['floorConfidence'],
+        floorMargin: (json['floorMargin'] as num?)?.toDouble(),
+        rank1Weight: (json['rank1Weight'] as num?)?.toDouble(),
+        beaconCount: json['beaconCount'],
+        motionState: json['motionState'],
+        rawX: (json['rawX'] as num?)?.toDouble(),
+        rawY: (json['rawY'] as num?)?.toDouble(),
+        jumpPixels: (json['jumpPixels'] as num?)?.toDouble(),
+        timeStamp: DateTime.now());
   }
 
   Map<String, dynamic> toJson() {
@@ -116,8 +156,17 @@ class BeaconPointLocation {
       'longitude': longitude,
       'beacons': beacons,
       'rssi': rssi,
-      'bestFloor':bestFloor,
-      'pendingFloor': pendingFloor
+      'bestFloor': bestFloor,
+      'pendingFloor': pendingFloor,
+      'confidence': confidence,
+      'floorConfidence': floorConfidence,
+      'floorMargin': floorMargin,
+      'rank1Weight': rank1Weight,
+      'beaconCount': beaconCount,
+      'motionState': motionState,
+      'rawX': rawX,
+      'rawY': rawY,
+      'jumpPixels': jumpPixels,
     };
   }
 }
@@ -126,16 +175,30 @@ class BeaconPointLocation {
 class GPSLocation {
   /// GPS latitude and longitude.
   final double latitude, longitude;
+  final double? accuracy;
+  final int? sampleCount;
+  final String? confidence;
+  final DateTime? timeStamp;
 
   GPSLocation({
     required this.latitude,
     required this.longitude,
+    this.accuracy,
+    this.sampleCount,
+    this.confidence,
+    this.timeStamp,
   });
 
   factory GPSLocation.fromJson(Map<String, dynamic> json) {
     return GPSLocation(
       latitude: (json['latitude'] as num).toDouble(),
       longitude: (json['longitude'] as num).toDouble(),
+      accuracy: (json['accuracy'] as num?)?.toDouble(),
+      sampleCount: json['sampleCount'],
+      confidence: json['confidence'],
+      timeStamp: json['timestamp'] == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(json['timestamp'] as int),
     );
   }
 
@@ -143,6 +206,10 @@ class GPSLocation {
     return {
       'latitude': latitude,
       'longitude': longitude,
+      'accuracy': accuracy,
+      'sampleCount': sampleCount,
+      'confidence': confidence,
+      'timestamp': timeStamp?.millisecondsSinceEpoch,
     };
   }
 }

@@ -1,16 +1,16 @@
 # localization_engine
 
-A Flutter plugin for **real-time indoor + outdoor positioning**. It fuses BLE (Bluetooth Low Energy) beacon scanning with GPS to estimate a user's location inside configured venues, streams location updates to your app, and (optionally) reports the user's position to a backend over a WebSocket for live tracking.
+A Flutter plugin for **real-time indoor + outdoor positioning**. It calculates quality-scored BLE (Bluetooth Low Energy) and GPS estimates, selects the best available source, streams location updates to your app, and reports the user's position to a backend over a WebSocket for live tracking.
 
-The engine pulls a venue's beacon map from the iwayplus backend, scans for nearby beacons on a fixed cadence, resolves the nearest beacon / best floor, falls back to a robust GPS position when no beacon is in range, and emits a unified location object.
+The engine pulls a venue's beacon map from the iwayplus backend, scans for nearby beacons, resolves a robust indoor position and floor, calculates an accuracy-weighted GPS position, and emits a unified location object with source and confidence diagnostics.
 
 ---
 
 ## Features
 
 - 🔵 **BLE beacon scanning** with RSSI filtering and statistical smoothing.
-- 🛰️ **GPS fusion** — falls back to a robust GPS position when no usable beacon is nearby (e.g. outdoors / ground floor).
-- 🏢 **Multi-floor resolution** — picks the best floor using RSSI dominance and circle-proximity heuristics.
+- 🛰️ **Quality-aware GPS selection** — filters complete GPS samples by accuracy and geographic outliers, then prefers the stronger source.
+- 🏢 **Multi-floor resolution** — selects building and floor with signal evidence, hysteresis, dwell time, and confidence reporting.
 - 📈 **Peak/valley detection** to catch strong, transient beacon hits.
 - 🔌 **Live tracking** — streams the resolved position to a backend WebSocket, with offline queueing and auto-reconnect.
 - ♻️ **Restart support** to recover from permission/adapter changes.
@@ -120,6 +120,11 @@ LocalizationEngine(
   Map<String, Map<int, Map<String, dynamic>>>? floorConfig,
   bool skipAdapterSetup = false,
   LocalizationMode localizationMode = LocalizationMode.bothGPSandBLE,
+  DateTime? stopAt,
+  Map<String, BeaconSignalCalibration> beaconCalibrations = const {},
+  Map<String, double> pixelsPerMeterByFloor = const {},
+  Map<String, FloorGeoTransform> geoTransformsByFloor = const {},
+  LocalPositionConstraint? positionConstraint,
 })
 ```
 
@@ -130,6 +135,11 @@ LocalizationEngine(
 | `floorConfig`      | `Map<String, Map<int, Map<String, dynamic>>>?` | Per-building, per-floor tuning thresholds (see [Floor Config](#floor-config)). |
 | `skipAdapterSetup` | `bool`                                         | Skip permission and adapter prompts when a foreground isolate has already completed setup. Native scans still follow `localizationMode`. |
 | `localizationMode` | `LocalizationMode`                             | Select GPS only, BLE only, or both. Defaults to `bothGPSandBLE`. |
+| `stopAt` | `DateTime?` | Optional absolute native-session deadline. |
+| `beaconCalibrations` | `Map<String, BeaconSignalCalibration>` | Per-beacon RSSI offset and reliability, keyed by beacon name. |
+| `pixelsPerMeterByFloor` | `Map<String, double>` | Physical map scale keyed as `buildingId:floor`; defaults to 4 pixels/metre. |
+| `geoTransformsByFloor` | `Map<String, FloorGeoTransform>` | Surveyed affine pixel-to-geographic transform keyed as `buildingId:floor`. |
+| `positionConstraint` | `LocalPositionConstraint?` | Optional projection onto the floor's walkable geometry. |
 
 Constructing the engine triggers, in order:
 
@@ -148,8 +158,20 @@ final gpsEngine = LocalizationEngine(
 final bleEngine = LocalizationEngine(
   'IITDelhi',
   localizationMode: LocalizationMode.onlyBle,
+  beaconCalibrations: const {
+    'IW26020521': BeaconSignalCalibration(
+      rssiOffset: 3.5,
+      reliability: 0.9,
+    ),
+  },
+  pixelsPerMeterByFloor: const {'building-id:0': 4.2},
 );
 ```
+
+Each `userLocation` event also includes `primarySource` and `confidence`.
+BLE results expose `floorConfidence`, `floorMargin`, `rank1Weight`,
+`beaconCount`, `motionState`, raw coordinates, and jump distance. GPS results
+expose estimated `accuracy`, accepted `sampleCount`, confidence, and timestamp.
 
 ## Background localization
 
@@ -157,6 +179,9 @@ Use `LocalizationBackgroundService` when localization must continue in an
 Android foreground-service isolate. Permission and adapter prompts are handled
 in the foreground before the service starts, while the background isolate
 restores the persisted venue, mode, base URL, and absolute stop deadline.
+Serializable beacon calibrations, floor scales, and geographic transforms are
+also restored. A `positionConstraint` callback is host-isolate-only and cannot
+be persisted across a background-isolate restart.
 
 ```dart
 await LocalizationBackgroundService.start(
@@ -180,8 +205,8 @@ currently running service configuration.
 
 ### iOS host configuration
 
-An iOS host must enable the **Location updates**, **Uses Bluetooth LE
-accessories**, and **Background fetch** background modes and provide location
+An iOS host must enable the **Location updates** and **Uses Bluetooth LE
+accessories** background modes and provide location
 and Bluetooth usage descriptions. The bundled example contains the required
 `Info.plist` entries. GPS uses native Core Location background delivery; BLE
 uses Core Bluetooth state restoration and best-effort background discovery.

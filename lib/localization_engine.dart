@@ -12,6 +12,7 @@ import 'package:localization_engine/src/PeakValleyDetector.dart';
 import 'package:localization_engine/src/config/config.dart';
 import 'package:localization_engine/src/localizationAlgorithm/ble_position_estimator.dart';
 import 'package:localization_engine/src/localization_mode.dart';
+import 'package:localization_engine/src/localization_source_arbitrator.dart';
 import 'package:localization_engine/src/network/api/UserTrackingWebSocket.dart';
 import 'package:localization_engine/src/network/api/beaconapi.dart';
 import 'package:localization_engine/src/network/model/beaconData.dart';
@@ -26,6 +27,9 @@ export 'package:adapter_manager/adapter_manager.dart';
 /// so consumers can render or diagnose the configured beacons directly.
 export 'src/network/model/beaconData.dart';
 export 'src/localization_mode.dart';
+export 'src/localization_source_arbitrator.dart';
+export 'src/localizationAlgorithm/ble_position_estimator.dart'
+    show BeaconSignalCalibration, FloorGeoTransform, LocalPositionConstraint;
 export 'src/background/localization_background_service.dart';
 export 'src/background/localization_service_configuration.dart';
 
@@ -76,6 +80,10 @@ class LocalizationEngine {
   final LocalizationMode localizationMode;
   final DateTime? stopAt;
   final String? _baseURL;
+  final Map<String, BeaconSignalCalibration> beaconCalibrations;
+  final Map<String, double> pixelsPerMeterByFloor;
+  final Map<String, FloorGeoTransform> geoTransformsByFloor;
+  final LocalPositionConstraint? positionConstraint;
 
   bool get _usesGps => localizationMode != LocalizationMode.onlyBle;
   bool get _usesBle => localizationMode != LocalizationMode.onlyGps;
@@ -139,6 +147,10 @@ class LocalizationEngine {
     bool skipAdapterSetup = false,
     this.localizationMode = LocalizationMode.bothGPSandBLE,
     this.stopAt,
+    this.beaconCalibrations = const <String, BeaconSignalCalibration>{},
+    this.pixelsPerMeterByFloor = const <String, double>{},
+    this.geoTransformsByFloor = const <String, FloorGeoTransform>{},
+    this.positionConstraint,
   })  : _skipAdapterSetup = skipAdapterSetup,
         _baseURL = baseURL {
     LocalizationEngine.floorConfig = floorConfig;
@@ -459,7 +471,13 @@ class LocalizationEngine {
     final localization = _localization;
     _estimatorStreamEstimator ??= localization == null
         ? null
-        : BLEPositionEstimator(beaconDb: localization.apibeaconmap);
+        : BLEPositionEstimator(
+            beaconDb: localization.apibeaconmap,
+            beaconCalibrations: beaconCalibrations,
+            pixelsPerMeterByFloor: pixelsPerMeterByFloor,
+            geoTransformsByFloor: geoTransformsByFloor,
+            positionConstraint: positionConstraint,
+          );
 
     // Buffer of readings received during the current 1-second interval.
     final List<Map<String, dynamic>> buffer = [];
@@ -581,7 +599,6 @@ class LocalizationEngine {
             beaconLocation = resolver.resolve(filteredData);
           }
         }
-        int? bestFloor = beaconLocation?.bestFloor;
         // if (beaconLocation != null && beaconLocation.rssi != null) {
         //   final threshold = floorConfig?[beaconLocation.bid]?[beaconLocation.floor]?["initialLocalizationThreshold"] ?? 75;
         //   print("initialLocalizationThreshold ${floorConfig?[beaconLocation.bid]?[beaconLocation.floor]?["initialLocalizationThreshold"]?.abs()}");
@@ -605,20 +622,46 @@ class LocalizationEngine {
         // }
 
         if (_usesGps) {
-          for (var data in gpsIncrement) {
-            _gpsBuffer.add(data['latitude'], data['longitude']);
+          for (final data in gpsIncrement) {
+            final latitude = (data['latitude'] as num?)?.toDouble();
+            final longitude = (data['longitude'] as num?)?.toDouble();
+            if (latitude == null || longitude == null) continue;
+            final rawTimestamp = data['timestamp'];
+            final timestamp = rawTimestamp is num
+                ? DateTime.fromMillisecondsSinceEpoch(rawTimestamp.toInt())
+                : DateTime.now();
+            _gpsBuffer.addSample(GpsSample(
+              latitude: latitude,
+              longitude: longitude,
+              timestamp: timestamp,
+              accuracy: (data['accuracy'] as num?)?.toDouble(),
+              speed: (data['speed'] as num?)?.toDouble(),
+              bearing: (data['bearing'] as num?)?.toDouble(),
+              altitude: (data['altitude'] as num?)?.toDouble(),
+            ));
           }
-          List<double>? gpsBufferLocation =
-              _gpsBuffer.getWindowedRobustPosition(
-                  const Duration(seconds: windowSeconds));
-          if (gpsBufferLocation != null &&
-              (bestFloor == null || bestFloor == 0)) {
+          final gpsEstimate = _gpsBuffer.getWindowedRobustEstimate(
+            const Duration(seconds: windowSeconds),
+          );
+          if (gpsEstimate != null) {
             gpsLocation = GPSLocation(
-              latitude: gpsBufferLocation[0],
-              longitude: gpsBufferLocation[1],
+              latitude: gpsEstimate.latitude,
+              longitude: gpsEstimate.longitude,
+              accuracy: gpsEstimate.accuracy,
+              sampleCount: gpsEstimate.sampleCount,
+              confidence: gpsEstimate.confidence,
+              timeStamp: gpsEstimate.timestamp,
             );
           }
         }
+
+        final decision = LocalizationSourceArbitrator.decide(
+          mode: localizationMode,
+          beacon: beaconLocation,
+          gps: gpsLocation,
+        );
+        beaconLocation = decision.beaconLocation;
+        gpsLocation = decision.gpsLocation;
 
         print("adding userLocation in collect&emit");
 
@@ -626,24 +669,37 @@ class LocalizationEngine {
           _userLocation.add(LocalizationEngineLocation(
             beaconLocation: beaconLocation,
             gpsLocation: gpsLocation,
+            primarySource: decision.primarySource,
+            confidence: decision.confidence,
           ));
         }
       } on StateError {
         if (_usesGps) {
-          List<double>? gpsBufferLocation =
-              _gpsBuffer.getWindowedRobustPosition(
-                  const Duration(seconds: windowSeconds));
-          if (gpsBufferLocation != null) {
+          final gpsEstimate = _gpsBuffer.getWindowedRobustEstimate(
+            const Duration(seconds: windowSeconds),
+          );
+          if (gpsEstimate != null) {
             gpsLocation = GPSLocation(
-              latitude: gpsBufferLocation[0],
-              longitude: gpsBufferLocation[1],
+              latitude: gpsEstimate.latitude,
+              longitude: gpsEstimate.longitude,
+              accuracy: gpsEstimate.accuracy,
+              sampleCount: gpsEstimate.sampleCount,
+              confidence: gpsEstimate.confidence,
+              timeStamp: gpsEstimate.timestamp,
             );
           }
         }
+        final decision = LocalizationSourceArbitrator.decide(
+          mode: localizationMode,
+          beacon: beaconLocation,
+          gps: gpsLocation,
+        );
         if (!_isDisposed) {
           _userLocation.add(LocalizationEngineLocation(
-            beaconLocation: beaconLocation,
-            gpsLocation: gpsLocation,
+            beaconLocation: decision.beaconLocation,
+            gpsLocation: decision.gpsLocation,
+            primarySource: decision.primarySource,
+            confidence: decision.confidence,
           ));
         }
       } on AdapterException {
@@ -691,8 +747,13 @@ class LocalizationEngine {
 
     // Lazily build the estimator over the loaded beacon map.
     final activeEstimator = estimator ??
-        (_positionEstimator ??=
-            BLEPositionEstimator(beaconDb: localization.apibeaconmap));
+        (_positionEstimator ??= BLEPositionEstimator(
+          beaconDb: localization.apibeaconmap,
+          beaconCalibrations: beaconCalibrations,
+          pixelsPerMeterByFloor: pixelsPerMeterByFloor,
+          geoTransformsByFloor: geoTransformsByFloor,
+          positionConstraint: positionConstraint,
+        ));
 
     // Flatten grouped scan data into individual timestamped readings.
     final readings = <BleReading>[];
@@ -702,7 +763,7 @@ class LocalizationEngine {
       }
     });
 
-    final pos = activeEstimator.update(readings, walking: true);
+    final pos = activeEstimator.update(readings);
     if (pos == null) return null;
 
     final rank1 = localization.apibeaconmap[pos.rank1Beacon];
@@ -721,6 +782,15 @@ class LocalizationEngine {
         rssi: pos.rank1Rssi.toDouble(),
         bestFloor: pos.floor,
         pendingFloor: pos.pendingFloor,
+        confidence: pos.confidence,
+        floorConfidence: pos.floorConfidence,
+        floorMargin: pos.floorMargin,
+        rank1Weight: pos.rank1Weight,
+        beaconCount: pos.nBeacons,
+        motionState: pos.motionState,
+        rawX: pos.rawX,
+        rawY: pos.rawY,
+        jumpPixels: pos.jumpPx,
         timeStamp: DateTime.now());
   }
 

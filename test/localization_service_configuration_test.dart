@@ -54,6 +54,39 @@ void main() {
       expect(restored.stopAt!.isBefore(DateTime.now()), isTrue);
     });
 
+    test('round-trips persisted accuracy calibration', () {
+      const configuration = LocalizationServiceConfiguration(
+        venueName: 'Iwayplus',
+        mode: LocalizationMode.bothGPSandBLE,
+        beaconCalibrations: <String, BeaconSignalCalibration>{
+          'IW1': BeaconSignalCalibration(rssiOffset: 2.5, reliability: 0.8),
+        },
+        pixelsPerMeterByFloor: <String, double>{'B1:0': 4.2},
+        geoTransformsByFloor: <String, FloorGeoTransform>{
+          'B1:0': FloorGeoTransform(
+            latitudeOrigin: 28,
+            longitudeOrigin: 77,
+            latitudePerPixelX: 0.001,
+            latitudePerPixelY: 0,
+            longitudePerPixelX: 0,
+            longitudePerPixelY: 0.001,
+          ),
+        },
+      );
+
+      final restored = LocalizationServiceConfiguration.fromJson(
+        configuration.toJson(),
+      );
+
+      expect(restored.beaconCalibrations['IW1']!.rssiOffset, 2.5);
+      expect(restored.beaconCalibrations['IW1']!.reliability, 0.8);
+      expect(restored.pixelsPerMeterByFloor['B1:0'], 4.2);
+      expect(
+        restored.geoTransformsByFloor['B1:0']!.convert(10, 20),
+        <double>[28.01, 77.02],
+      );
+    });
+
     test('rejects unknown modes', () {
       expect(
         () => LocalizationServiceConfiguration.fromJson(
