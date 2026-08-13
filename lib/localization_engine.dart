@@ -15,6 +15,7 @@ import 'package:localization_engine/src/localization_mode.dart';
 import 'package:localization_engine/src/network/api/UserTrackingWebSocket.dart';
 import 'package:localization_engine/src/network/api/beaconapi.dart';
 import 'package:localization_engine/src/network/model/beaconData.dart';
+import 'package:localization_engine/src/surrounding_device_rssi_aggregator.dart';
 
 import 'initialLocalization.dart';
 import 'location.dart';
@@ -312,6 +313,7 @@ class LocalizationEngine {
           return;
         }
         initBleStream();
+        initSurroundingDeviceStream();
         initEstimatorLocationStream();
       }
       _isScanning = true;
@@ -337,6 +339,7 @@ class LocalizationEngine {
     if (_usesBle) {
       await _methodChannel.invokeMethod('stopScan');
       await _stopEstimatorLocationStream();
+      _stopSurroundingDeviceStream();
     }
     if (_usesGps) {
       await _methodChannel.invokeMethod('stopGpsScan');
@@ -365,6 +368,7 @@ class LocalizationEngine {
     await _gpsSubscription?.cancel();
     _gpsSubscription = null;
     await _stopEstimatorLocationStream();
+    _stopSurroundingDeviceStream();
 
     await _safeStopNativeScanner('stopScan');
     await _safeStopNativeScanner('stopGpsScan');
@@ -378,6 +382,7 @@ class LocalizationEngine {
     await _gpsController.close();
     await _userLocation.close();
     await _estimatorLocationController.close();
+    await _surroundingDeviceController.close();
   }
 
   Future<void> _safeStopNativeScanner(String method) async {
@@ -408,7 +413,11 @@ class LocalizationEngine {
         final List<dynamic> rawList = event as List;
         for (var entry in rawList) {
           final map = Map<String, dynamic>.from(entry);
-
+          final name = map['name'];
+          if (name is! String || !name.toLowerCase().startsWith('iw')) {
+            _surroundingDeviceAggregator.add(map);
+            continue;
+          }
           final rawRssi = map['rssi'];
           if (rawRssi == null) continue;
           final rssi = (rawRssi as num).abs();
@@ -426,6 +435,52 @@ class LocalizationEngine {
     }, onError: (error) {
       print('bleStream error: $error');
     });
+  }
+
+  final _surroundingDeviceAggregator = SurroundingDeviceRssiAggregator();
+  final _surroundingDeviceController =
+      StreamController<Map<String, int>>.broadcast();
+  Timer? _surroundingDeviceTimer;
+  Future<String>? _scannerDeviceId;
+
+  /// Median RSSI per BLE advertiser seen during each ten-second window.
+  ///
+  /// Keys are platform BLE identifiers and are not permanent device IDs. This
+  /// stream contains BLE advertisers of any kind; identifying host-app phones
+  /// specifically requires those apps to advertise a dedicated service UUID.
+  Stream<Map<String, int>> get surroundingDeviceSnapshots =>
+      _surroundingDeviceController.stream;
+
+  void initSurroundingDeviceStream() {
+    if (_surroundingDeviceTimer != null) return;
+    _scannerDeviceId ??= _getDeviceId();
+    _surroundingDeviceTimer = Timer.periodic(
+      const Duration(seconds: 10),
+      (_) => unawaited(_emitSurroundingDeviceSnapshot()),
+    );
+  }
+
+  Future<void> _emitSurroundingDeviceSnapshot() async {
+    final devices = _surroundingDeviceAggregator.takeMedianSnapshot();
+    if (_isDisposed) return;
+
+    _surroundingDeviceController.add(Map<String, int>.unmodifiable(devices));
+    final scannerId = await (_scannerDeviceId ??= _getDeviceId());
+    if (_isDisposed) return;
+    wsService.sendSurroundingDevices(
+      SurroundingDevicesPayload(
+        scannerId: scannerId,
+        timestamp: DateTime.now().millisecondsSinceEpoch,
+        devices: devices,
+        venueName: _venueName,
+      ),
+    );
+  }
+
+  void _stopSurroundingDeviceStream() {
+    _surroundingDeviceTimer?.cancel();
+    _surroundingDeviceTimer = null;
+    _surroundingDeviceAggregator.clear();
   }
 
   final _estimatorLocationController =
