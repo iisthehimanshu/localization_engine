@@ -170,7 +170,8 @@ final bleEngine = LocalizationEngine(
 
 Each `userLocation` event also includes `primarySource` and `confidence`.
 BLE results expose `floorConfidence`, `floorMargin`, `rank1Weight`,
-`beaconCount`, `motionState`, raw coordinates, and jump distance. GPS results
+`beaconCount`, `motionState`, raw coordinates, final smoothed `jumpPixels`, and
+`rawCandidateJumpPixels` for diagnosing RSSI noise. GPS results
 expose estimated `accuracy`, accepted `sampleCount`, confidence, and timestamp.
 
 ## Background localization

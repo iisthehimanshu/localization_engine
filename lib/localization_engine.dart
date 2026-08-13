@@ -85,6 +85,12 @@ class LocalizationEngine {
   final Map<String, FloorGeoTransform> geoTransformsByFloor;
   final LocalPositionConstraint? positionConstraint;
 
+  /// Emits one structured line per localization decision.
+  ///
+  /// Enabled by default in debug builds and disabled in release builds. This
+  /// only affects local console output; tracking payloads are unchanged.
+  final bool enableDiagnosticLogging;
+
   bool get _usesGps => localizationMode != LocalizationMode.onlyBle;
   bool get _usesBle => localizationMode != LocalizationMode.onlyGps;
 
@@ -151,6 +157,7 @@ class LocalizationEngine {
     this.pixelsPerMeterByFloor = const <String, double>{},
     this.geoTransformsByFloor = const <String, FloorGeoTransform>{},
     this.positionConstraint,
+    this.enableDiagnosticLogging = kDebugMode,
   })  : _skipAdapterSetup = skipAdapterSetup,
         _baseURL = baseURL {
     LocalizationEngine.floorConfig = floorConfig;
@@ -660,10 +667,13 @@ class LocalizationEngine {
           beacon: beaconLocation,
           gps: gpsLocation,
         );
+        _logLocalizationDecision(
+          beaconCandidate: beaconLocation,
+          gpsCandidate: gpsLocation,
+          decision: decision,
+        );
         beaconLocation = decision.beaconLocation;
         gpsLocation = decision.gpsLocation;
-
-        print("adding userLocation in collect&emit");
 
         if (!_isDisposed) {
           _userLocation.add(LocalizationEngineLocation(
@@ -693,6 +703,11 @@ class LocalizationEngine {
           mode: localizationMode,
           beacon: beaconLocation,
           gps: gpsLocation,
+        );
+        _logLocalizationDecision(
+          beaconCandidate: beaconLocation,
+          gpsCandidate: gpsLocation,
+          decision: decision,
         );
         if (!_isDisposed) {
           _userLocation.add(LocalizationEngineLocation(
@@ -790,6 +805,7 @@ class LocalizationEngine {
         motionState: pos.motionState,
         rawX: pos.rawX,
         rawY: pos.rawY,
+        rawCandidateJumpPixels: pos.rawJumpPx,
         jumpPixels: pos.jumpPx,
         timeStamp: DateTime.now());
   }
@@ -875,7 +891,6 @@ class LocalizationEngine {
 
     await _trackingSubscription?.cancel();
     _trackingSubscription = _userLocation.stream.listen((data) {
-      print("recieved data in _trackUserLocation");
       BeaconPointLocation? beaconLocation = data.beaconLocation;
       GPSLocation? gpsLocation = data.gpsLocation;
       if (gpsLocation == null && beaconLocation == null) return;
@@ -910,6 +925,58 @@ class LocalizationEngine {
       wsService.sendTracking(payload);
     });
   }
+
+  void _logLocalizationDecision({
+    required BeaconPointLocation? beaconCandidate,
+    required GPSLocation? gpsCandidate,
+    required LocalizationSourceDecision decision,
+  }) {
+    if (!enableDiagnosticLogging) return;
+
+    final keptSources = <String>[
+      if (decision.beaconLocation != null) 'ble',
+      if (decision.gpsLocation != null) 'gps',
+    ].join(',');
+
+    debugPrint(
+      '[Localization] mode=${localizationMode.name} '
+      'primary=${decision.primarySource ?? 'none'} '
+      'confidence=${decision.confidence ?? 'none'} '
+      'kept=${keptSources.isEmpty ? 'none' : keptSources} '
+      'ble=${_formatBleDiagnostic(beaconCandidate)} '
+      'gps=${_formatGpsDiagnostic(gpsCandidate)}',
+    );
+  }
+
+  String _formatBleDiagnostic(BeaconPointLocation? location) {
+    if (location == null) return 'none';
+    return '{building:${location.bid},floor:${location.floor},'
+        'pendingFloor:${location.pendingFloor ?? 'none'},'
+        'xy:${location.x},${location.y},'
+        'raw:${_formatNumber(location.rawX)},${_formatNumber(location.rawY)},'
+        'movePx:${_formatNumber(location.jumpPixels)},'
+        'candidateJumpPx:${_formatNumber(location.rawCandidateJumpPixels)},'
+        'beacons:${location.beaconCount ?? location.beacons.length},'
+        'rank1:${location.beacons.isEmpty ? 'none' : location.beacons.first},'
+        'rssi:${_formatNumber(location.rssi)},'
+        'rank1Weight:${_formatNumber(location.rank1Weight)},'
+        'motion:${location.motionState ?? 'unknown'},'
+        'confidence:${location.confidence ?? 'unknown'},'
+        'floorConfidence:${location.floorConfidence ?? 'unknown'},'
+        'floorMargin:${_formatNumber(location.floorMargin)}}';
+  }
+
+  String _formatGpsDiagnostic(GPSLocation? location) {
+    if (location == null) return 'none';
+    return '{lat:${location.latitude.toStringAsFixed(7)},'
+        'lon:${location.longitude.toStringAsFixed(7)},'
+        'accuracyM:${_formatNumber(location.accuracy)},'
+        'samples:${location.sampleCount ?? 0},'
+        'confidence:${location.confidence ?? 'unknown'}}';
+  }
+
+  String _formatNumber(num? value) =>
+      value == null || !value.isFinite ? 'n/a' : value.toStringAsFixed(2);
 
   /// Fetches the venue's configured beacons (cache-first) for rendering or
   /// diagnostics.

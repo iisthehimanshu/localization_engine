@@ -107,6 +107,10 @@ class PositionResult {
   /// Distance the smoothed position moved since last update (pixels)
   final double jumpPx;
 
+  /// Distance from the previous smoothed position to the unconstrained raw
+  /// BLE candidate. Useful for diagnosing RSSI noise; this is not user motion.
+  final double rawJumpPx;
+
   /// Number of beacons detected in the current window
   final int nBeacons;
 
@@ -144,6 +148,7 @@ class PositionResult {
     required this.rank1Rssi,
     required this.rank1Weight,
     required this.jumpPx,
+    required this.rawJumpPx,
     required this.nBeacons,
     this.floorChanged = false,
     this.pendingFloor,
@@ -271,9 +276,13 @@ class BLEPositionEstimator {
   // ── Tunable constants ──────────────────────────────────────────────────────
   static const double _continuityBonus = 0.5; // dBm bonus for repeat beacons
   static const double _rssiGapThresh = 8.0; // heuristic walking signal
-  static const double _posDeltaThresh = 12.0; // heuristic walking signal (px)
+  static const double _posDeltaThreshM = 3.0; // heuristic walking signal
   static const double _alphaStationary = 0.25; // EMA α stationary
   static const double _alphaWalking = 0.7; // EMA α walking
+  static const int _walkingConfirmationUpdates = 3;
+  static const int _stationaryConfirmationUpdates = 2;
+  static const double _walkingMaxSpeedMps = 2.5;
+  static const double _stationaryMaxSpeedMps = 0.75;
   static const int _rssiMin = -110;
   static const int _rssiMax = -55;
   // Trust band a beacon's aggregated RSSI must sit inside to be positioned on.
@@ -342,6 +351,10 @@ class BLEPositionEstimator {
   int _pendUpdates = 0; // consecutive updates it has led for
   DateTime? _lastCommitAt; // for _minCommitGap
   DateTime? _lastUpdateAt;
+  bool _autoWalking = false;
+  int _walkingEvidenceUpdates = 0;
+  int _stationaryEvidenceUpdates = 0;
+  List<double>? _lastWalkingEvidenceVector;
 
   /// Building the last fix was resolved in — coordinates from previous
   /// results are only comparable while this is unchanged.
@@ -497,6 +510,7 @@ class BLEPositionEstimator {
       _currFloor = null;
       _lastCommitAt = null;
       _lastUpdateAt = null;
+      _resetMotionState();
       _clearPendingFloor();
     }
     _currBuilding = targetBuilding;
@@ -561,48 +575,59 @@ class BLEPositionEstimator {
         ? (floorEntries[0].value.penPeak - floorEntries[1].value.penPeak).abs()
         : 0.0;
 
+    final pixelsPerMeter =
+        pixelsPerMeterByFloor['$targetBuilding:$targetFloor'] ?? 4.0;
+
     // ── 9. Motion detection ──────────────────────────────────────────────
     final bool isWalking;
     if (walking != null) {
       // Explicit flag from app navigation state — most accurate
       isWalking = walking;
+      _resetMotionState();
     } else if (_prevR1 == null) {
       // First window — no reference yet
       isWalking = false;
     } else {
-      // Heuristic: vote from 3 independent signals (walking if ≥2 fire)
+      // Rank changes, centroid movement, and RSSI gaps can all be caused by the
+      // same reflected BLE spike. Treat the vote as candidate evidence only;
+      // walking is unlocked after sustained movement in a consistent direction.
       int signals = 0;
       if (currR1 != _prevR1) signals++;
+      double dx = 0;
+      double dy = 0;
       if (_prevRawPos != null) {
-        final dx = rawX - _prevRawPos![0];
-        final dy = rawY - _prevRawPos![1];
-        if (sqrt(dx * dx + dy * dy) >= _posDeltaThresh) signals++;
+        dx = rawX - _prevRawPos![0];
+        dy = rawY - _prevRawPos![1];
+        final deltaM = sqrt(dx * dx + dy * dy) / max(0.1, pixelsPerMeter);
+        if (deltaM >= _posDeltaThreshM) signals++;
       }
       if (rssiGap >= _rssiGapThresh) signals++;
-      isWalking = signals >= 2;
+      _updateAutoMotion(signals >= 2, dx, dy);
+      isWalking = _autoWalking;
     }
 
     final alpha = isWalking ? _alphaWalking : _alphaStationary;
-    final pixelsPerMeter =
-        pixelsPerMeterByFloor['$targetBuilding:$targetFloor'] ?? 4.0;
     final elapsedSeconds = _lastUpdateAt == null
         ? 1.0
         : (now.difference(_lastUpdateAt!).inMilliseconds / 1000)
             .clamp(0.25, 3.0);
-    final maxJump =
-        (isWalking ? 6.0 : 0.75) * max(0.1, pixelsPerMeter) * elapsedSeconds;
+    final maxJump = (isWalking ? _walkingMaxSpeedMps : _stationaryMaxSpeedMps) *
+        max(0.1, pixelsPerMeter) *
+        elapsedSeconds;
 
     // ── 10. Velocity cap + EMA ───────────────────────────────────────────
+    double rawJumpPx = 0.0;
     double jumpPx = 0.0;
+    final previousSmooth = _emaPos == null ? null : List<double>.from(_emaPos!);
     if (_emaPos == null) {
       _emaPos = [rawX, rawY];
     } else {
       final dx = rawX - _emaPos![0];
       final dy = rawY - _emaPos![1];
-      jumpPx = sqrt(dx * dx + dy * dy);
+      rawJumpPx = sqrt(dx * dx + dy * dy);
       double cx = rawX, cy = rawY;
-      if (jumpPx > maxJump) {
-        final scale = maxJump / jumpPx;
+      if (rawJumpPx > maxJump) {
+        final scale = maxJump / rawJumpPx;
         cx = _emaPos![0] + dx * scale;
         cy = _emaPos![1] + dy * scale;
       }
@@ -621,6 +646,12 @@ class BLEPositionEstimator {
       if (constrained.x.isFinite && constrained.y.isFinite) {
         _emaPos = <double>[constrained.x, constrained.y];
       }
+    }
+
+    if (previousSmooth != null) {
+      final dx = _emaPos![0] - previousSmooth[0];
+      final dy = _emaPos![1] - previousSmooth[1];
+      jumpPx = sqrt(dx * dx + dy * dy);
     }
 
     final sx = _emaPos![0], sy = _emaPos![1];
@@ -672,6 +703,7 @@ class BLEPositionEstimator {
       rank1Rssi: floorEntries.first.value.peak,
       rank1Weight: topW,
       jumpPx: jumpPx,
+      rawJumpPx: rawJumpPx,
       nBeacons: floorEntries.length,
       floorChanged: floorChanged,
       pendingFloor: _pendFloor,
@@ -691,7 +723,47 @@ class BLEPositionEstimator {
     _currFloor = null;
     _lastCommitAt = null;
     _lastUpdateAt = null;
+    _resetMotionState();
     _clearPendingFloor();
+  }
+
+  void _updateAutoMotion(bool hasEvidence, double dx, double dy) {
+    if (hasEvidence) {
+      final previous = _lastWalkingEvidenceVector;
+      final directionIsConsistent =
+          previous == null || dx * previous[0] + dy * previous[1] > 0;
+      if (directionIsConsistent) {
+        _walkingEvidenceUpdates++;
+        _stationaryEvidenceUpdates = 0;
+      } else {
+        _walkingEvidenceUpdates = 1;
+        if (_autoWalking) {
+          _stationaryEvidenceUpdates++;
+          if (_stationaryEvidenceUpdates >= _stationaryConfirmationUpdates) {
+            _autoWalking = false;
+          }
+        }
+      }
+      _lastWalkingEvidenceVector = <double>[dx, dy];
+      if (_walkingEvidenceUpdates >= _walkingConfirmationUpdates) {
+        _autoWalking = true;
+      }
+      return;
+    }
+
+    _walkingEvidenceUpdates = 0;
+    _lastWalkingEvidenceVector = null;
+    _stationaryEvidenceUpdates++;
+    if (_stationaryEvidenceUpdates >= _stationaryConfirmationUpdates) {
+      _autoWalking = false;
+    }
+  }
+
+  void _resetMotionState() {
+    _autoWalking = false;
+    _walkingEvidenceUpdates = 0;
+    _stationaryEvidenceUpdates = 0;
+    _lastWalkingEvidenceVector = null;
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

@@ -95,6 +95,7 @@ class BeaconPointLocation {
   final String? motionState;
   final double? rawX;
   final double? rawY;
+  final double? rawCandidateJumpPixels;
   final double? jumpPixels;
 
   DateTime timeStamp;
@@ -119,6 +120,7 @@ class BeaconPointLocation {
     this.motionState,
     this.rawX,
     this.rawY,
+    this.rawCandidateJumpPixels,
     this.jumpPixels,
   });
 
@@ -142,6 +144,8 @@ class BeaconPointLocation {
         motionState: json['motionState'],
         rawX: (json['rawX'] as num?)?.toDouble(),
         rawY: (json['rawY'] as num?)?.toDouble(),
+        rawCandidateJumpPixels:
+            (json['rawCandidateJumpPixels'] as num?)?.toDouble(),
         jumpPixels: (json['jumpPixels'] as num?)?.toDouble(),
         timeStamp: DateTime.now());
   }
@@ -166,6 +170,7 @@ class BeaconPointLocation {
       'motionState': motionState,
       'rawX': rawX,
       'rawY': rawY,
+      'rawCandidateJumpPixels': rawCandidateJumpPixels,
       'jumpPixels': jumpPixels,
     };
   }

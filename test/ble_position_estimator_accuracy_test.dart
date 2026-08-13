@@ -73,6 +73,61 @@ void main() {
     expect(result!.motionState, 'stationary');
   });
 
+  test('isolated reflected position changes do not unlock walking', () {
+    var now = DateTime(2026, 1, 1);
+    final estimator = BLEPositionEstimator(
+      beaconDb: <String, Beacon>{
+        'left': _beacon('left', 0),
+        'right': _beacon('right', 40),
+      },
+      clock: () => now,
+    );
+
+    PositionResult update(String beacon) {
+      final result = estimator.update(<BleReading>[
+        BleReading(name: beacon, rssi: -70, timestamp: now),
+      ]);
+      now = now.add(const Duration(seconds: 3));
+      return result!;
+    }
+
+    expect(update('left').motionState, 'stationary');
+    final reflectedAway = update('right');
+    final reflectedBack = update('left');
+    final settled = update('left');
+
+    expect(reflectedAway.motionState, 'stationary');
+    expect(reflectedBack.motionState, 'stationary');
+    expect(settled.motionState, 'stationary');
+    expect(reflectedAway.rawJumpPx, greaterThan(reflectedAway.jumpPx));
+    expect(reflectedAway.jumpPx / 4, lessThanOrEqualTo(0.75 * 3 * 0.25));
+  });
+
+  test('walking requires three directionally consistent evidence windows', () {
+    var now = DateTime(2026, 1, 1);
+    final estimator = BLEPositionEstimator(
+      beaconDb: <String, Beacon>{
+        for (final x in <int>[0, 20, 40, 60]) 'b$x': _beacon('b$x', x),
+      },
+      clock: () => now,
+    );
+
+    PositionResult update(int x) {
+      final result = estimator.update(<BleReading>[
+        BleReading(name: 'b$x', rssi: -70, timestamp: now),
+      ]);
+      now = now.add(const Duration(seconds: 3));
+      return result!;
+    }
+
+    expect(update(0).motionState, 'stationary');
+    expect(update(20).motionState, 'stationary');
+    expect(update(40).motionState, 'stationary');
+    expect(update(60).motionState, 'walking');
+    expect(update(40).motionState, 'walking');
+    expect(update(60).motionState, 'stationary');
+  });
+
   test('walkable constraint and floor transform are applied to the fix', () {
     final now = DateTime(2026, 1, 1);
     final estimator = BLEPositionEstimator(
