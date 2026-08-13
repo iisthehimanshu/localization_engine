@@ -4,7 +4,6 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
@@ -152,12 +151,7 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
     scanCallback = object : ScanCallback() {
       override fun onScanResult(callbackType: Int, result: ScanResult) {
-        val deviceName =
-          result.scanRecord?.deviceName
-            ?: result.device.name
-            ?: return
-
-        if (!deviceName.startsWith("IW", ignoreCase = true)) return
+        val deviceName = result.scanRecord?.deviceName ?: result.device.name ?: ""
 
         val manufacturerData = result.scanRecord?.manufacturerSpecificData
         var manufacturerHex: String? = null
@@ -190,13 +184,11 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
       .setReportDelay(0L)
       .build()
 
-    val scanFilters = IWAYPLUS_MANUFACTURER_IDS.map { manufacturerId ->
-      ScanFilter.Builder()
-        .setManufacturerData(manufacturerId, byteArrayOf())
-        .build()
-    }
-
-    bluetoothLeScanner?.startScan(scanFilters, scanSettings, scanCallback)
+    // Scan all BLE advertisements. Dart fans this stream out: IW devices feed
+    // localization, while every advertiser can feed the 10-second proximity
+    // report. A dedicated service UUID is still required to identify host-app
+    // phones specifically.
+    bluetoothLeScanner?.startScan(emptyList(), scanSettings, scanCallback)
     Log.d("BLE", "BLE scan started")
 
     timeout?.let {

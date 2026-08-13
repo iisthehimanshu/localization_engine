@@ -16,6 +16,7 @@ import 'package:localization_engine/src/localization_source_arbitrator.dart';
 import 'package:localization_engine/src/network/api/UserTrackingWebSocket.dart';
 import 'package:localization_engine/src/network/api/beaconapi.dart';
 import 'package:localization_engine/src/network/model/beaconData.dart';
+import 'package:localization_engine/src/surrounding_device_rssi_aggregator.dart';
 
 import 'initialLocalization.dart';
 import 'location.dart';
@@ -91,6 +92,13 @@ class LocalizationEngine {
   /// only affects local console output; tracking payloads are unchanged.
   final bool enableDiagnosticLogging;
 
+  /// BLE observation window used for surrounding-device RSSI aggregation.
+  ///
+  /// One median RSSI per non-`IW` advertiser is attached under `devices` to
+  /// the next `send-tracking` payload after each window. Platform identifiers
+  /// may rotate and must not be treated as permanent device identities.
+  final Duration surroundingDeviceScanInterval;
+
   bool get _usesGps => localizationMode != LocalizationMode.onlyBle;
   bool get _usesBle => localizationMode != LocalizationMode.onlyGps;
 
@@ -158,8 +166,16 @@ class LocalizationEngine {
     this.geoTransformsByFloor = const <String, FloorGeoTransform>{},
     this.positionConstraint,
     this.enableDiagnosticLogging = kDebugMode,
+    this.surroundingDeviceScanInterval = const Duration(seconds: 10),
   })  : _skipAdapterSetup = skipAdapterSetup,
         _baseURL = baseURL {
+    if (surroundingDeviceScanInterval <= Duration.zero) {
+      throw ArgumentError.value(
+        surroundingDeviceScanInterval,
+        'surroundingDeviceScanInterval',
+        'Must be greater than zero.',
+      );
+    }
     LocalizationEngine.floorConfig = floorConfig;
     AppConfig.url = baseURL;
     unawaited(init(venueName: venueName));
@@ -331,6 +347,7 @@ class LocalizationEngine {
           return;
         }
         initBleStream();
+        initSurroundingDeviceStream();
         initEstimatorLocationStream();
       }
       _isScanning = true;
@@ -356,6 +373,7 @@ class LocalizationEngine {
     if (_usesBle) {
       await _methodChannel.invokeMethod('stopScan');
       await _stopEstimatorLocationStream();
+      _stopSurroundingDeviceStream();
     }
     if (_usesGps) {
       await _methodChannel.invokeMethod('stopGpsScan');
@@ -384,6 +402,7 @@ class LocalizationEngine {
     await _gpsSubscription?.cancel();
     _gpsSubscription = null;
     await _stopEstimatorLocationStream();
+    _stopSurroundingDeviceStream();
 
     await _safeStopNativeScanner('stopScan');
     await _safeStopNativeScanner('stopGpsScan');
@@ -397,6 +416,7 @@ class LocalizationEngine {
     await _gpsController.close();
     await _userLocation.close();
     await _estimatorLocationController.close();
+    await _surroundingDeviceController.close();
   }
 
   Future<void> _safeStopNativeScanner(String method) async {
@@ -427,7 +447,11 @@ class LocalizationEngine {
         final List<dynamic> rawList = event as List;
         for (var entry in rawList) {
           final map = Map<String, dynamic>.from(entry);
-
+          final name = map['name'];
+          if (name is! String || !name.toLowerCase().startsWith('iw')) {
+            _surroundingDeviceAggregator.add(map);
+            continue;
+          }
           final rawRssi = map['rssi'];
           if (rawRssi == null) continue;
           final rssi = (rawRssi as num).abs();
@@ -445,6 +469,43 @@ class LocalizationEngine {
     }, onError: (error) {
       print('bleStream error: $error');
     });
+  }
+
+  final _surroundingDeviceAggregator = SurroundingDeviceRssiAggregator();
+  final _surroundingDeviceController =
+      StreamController<Map<String, int>>.broadcast();
+  Timer? _surroundingDeviceTimer;
+  Map<String, int>? _pendingSurroundingDevices;
+
+  /// Median RSSI per BLE advertiser seen during each configured window.
+  ///
+  /// Keys are platform BLE identifiers and are not permanent device IDs. This
+  /// stream contains BLE advertisers of any kind; identifying host-app phones
+  /// specifically requires those apps to advertise a dedicated service UUID.
+  Stream<Map<String, int>> get surroundingDeviceSnapshots =>
+      _surroundingDeviceController.stream;
+
+  void initSurroundingDeviceStream() {
+    if (_surroundingDeviceTimer != null) return;
+    _surroundingDeviceTimer = Timer.periodic(
+      surroundingDeviceScanInterval,
+      (_) => _emitSurroundingDeviceSnapshot(),
+    );
+  }
+
+  void _emitSurroundingDeviceSnapshot() {
+    final devices = _surroundingDeviceAggregator.takeMedianSnapshot();
+    if (_isDisposed) return;
+
+    _surroundingDeviceController.add(Map<String, int>.unmodifiable(devices));
+    _pendingSurroundingDevices = Map<String, int>.unmodifiable(devices);
+  }
+
+  void _stopSurroundingDeviceStream() {
+    _surroundingDeviceTimer?.cancel();
+    _surroundingDeviceTimer = null;
+    _surroundingDeviceAggregator.clear();
+    _pendingSurroundingDevices = null;
   }
 
   final _estimatorLocationController =
@@ -920,6 +981,7 @@ class LocalizationEngine {
             ],
         },
         venueName: _venueName,
+        surroundingDevices: _takePendingSurroundingDevices(),
       );
 
       wsService.sendTracking(payload);
@@ -977,6 +1039,12 @@ class LocalizationEngine {
 
   String _formatNumber(num? value) =>
       value == null || !value.isFinite ? 'n/a' : value.toStringAsFixed(2);
+
+  Map<String, int>? _takePendingSurroundingDevices() {
+    final devices = _pendingSurroundingDevices;
+    _pendingSurroundingDevices = null;
+    return devices;
+  }
 
   /// Fetches the venue's configured beacons (cache-first) for rendering or
   /// diagnostics.

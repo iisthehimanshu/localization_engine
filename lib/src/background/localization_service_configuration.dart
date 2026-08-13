@@ -11,6 +11,7 @@ class LocalizationServiceConfiguration {
     this.beaconCalibrations = const <String, BeaconSignalCalibration>{},
     this.pixelsPerMeterByFloor = const <String, double>{},
     this.geoTransformsByFloor = const <String, FloorGeoTransform>{},
+    this.surroundingDeviceScanInterval = const Duration(seconds: 10),
   });
 
   final String venueName;
@@ -20,6 +21,7 @@ class LocalizationServiceConfiguration {
   final Map<String, BeaconSignalCalibration> beaconCalibrations;
   final Map<String, double> pixelsPerMeterByFloor;
   final Map<String, FloorGeoTransform> geoTransformsByFloor;
+  final Duration surroundingDeviceScanInterval;
 
   Map<String, Object?> toJson() => <String, Object?>{
         'venueName': venueName,
@@ -45,6 +47,8 @@ class LocalizationServiceConfiguration {
               'longitudePerPixelY': entry.value.longitudePerPixelY,
             },
         },
+        'surroundingDeviceScanIntervalMs':
+            surroundingDeviceScanInterval.inMilliseconds,
       };
 
   factory LocalizationServiceConfiguration.fromJson(
@@ -64,6 +68,8 @@ class LocalizationServiceConfiguration {
     final geoTransformsByFloor = _parseGeoTransforms(
       json['geoTransformsByFloor'],
     );
+    final surroundingIntervalMilliseconds =
+        json['surroundingDeviceScanIntervalMs'] ?? 10000;
 
     if (venueName is! String || venueName.trim().isEmpty) {
       throw const FormatException('venueName must be a non-empty string.');
@@ -76,6 +82,12 @@ class LocalizationServiceConfiguration {
     }
     if (stopAtMilliseconds != null && stopAtMilliseconds is! int) {
       throw const FormatException('stopAt must be an integer or null.');
+    }
+    if (surroundingIntervalMilliseconds is! int ||
+        surroundingIntervalMilliseconds <= 0) {
+      throw const FormatException(
+        'surroundingDeviceScanIntervalMs must be a positive integer.',
+      );
     }
 
     final mode = LocalizationMode.values.where(
@@ -95,6 +107,8 @@ class LocalizationServiceConfiguration {
       beaconCalibrations: beaconCalibrations,
       pixelsPerMeterByFloor: pixelsPerMeterByFloor,
       geoTransformsByFloor: geoTransformsByFloor,
+      surroundingDeviceScanInterval:
+          Duration(milliseconds: surroundingIntervalMilliseconds),
     );
   }
 

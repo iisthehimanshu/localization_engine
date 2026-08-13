@@ -38,6 +38,7 @@ class LocalizationBackgroundService {
     Map<String, double> pixelsPerMeterByFloor = const <String, double>{},
     Map<String, FloorGeoTransform> geoTransformsByFloor =
         const <String, FloorGeoTransform>{},
+    Duration surroundingDeviceScanInterval = const Duration(seconds: 10),
   }) async {
     final normalizedVenueName = venueName.trim();
     if (normalizedVenueName.isEmpty) {
@@ -47,6 +48,13 @@ class LocalizationBackgroundService {
       throw ArgumentError.value(
         duration,
         'duration',
+        'Must be greater than zero.',
+      );
+    }
+    if (surroundingDeviceScanInterval <= Duration.zero) {
+      throw ArgumentError.value(
+        surroundingDeviceScanInterval,
+        'surroundingDeviceScanInterval',
         'Must be greater than zero.',
       );
     }
@@ -66,6 +74,7 @@ class LocalizationBackgroundService {
       beaconCalibrations: beaconCalibrations,
       pixelsPerMeterByFloor: pixelsPerMeterByFloor,
       geoTransformsByFloor: geoTransformsByFloor,
+      surroundingDeviceScanInterval: surroundingDeviceScanInterval,
     );
     await _writeConfiguration(configuration);
 
@@ -79,6 +88,8 @@ class LocalizationBackgroundService {
         beaconCalibrations: configuration.beaconCalibrations,
         pixelsPerMeterByFloor: configuration.pixelsPerMeterByFloor,
         geoTransformsByFloor: configuration.geoTransformsByFloor,
+        surroundingDeviceScanInterval:
+            configuration.surroundingDeviceScanInterval,
       );
       return;
     }
@@ -183,6 +194,8 @@ class LocalizationBackgroundService {
         beaconCalibrations: configuration.beaconCalibrations,
         pixelsPerMeterByFloor: configuration.pixelsPerMeterByFloor,
         geoTransformsByFloor: configuration.geoTransformsByFloor,
+        surroundingDeviceScanInterval:
+            configuration.surroundingDeviceScanInterval,
       );
     }
     return configuration;
@@ -317,6 +330,7 @@ Future<void> _runBackgroundService(ServiceInstance service) async {
     beaconCalibrations: configuration.beaconCalibrations,
     pixelsPerMeterByFloor: configuration.pixelsPerMeterByFloor,
     geoTransformsByFloor: configuration.geoTransformsByFloor,
+    surroundingDeviceScanInterval: configuration.surroundingDeviceScanInterval,
   );
 }
 

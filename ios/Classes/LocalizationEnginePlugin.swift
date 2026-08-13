@@ -70,7 +70,6 @@ public final class LocalizationEnginePlugin: NSObject,
         "localization_engine.ios_background_session"
     private static let restorationIdentifier =
         "com.iwayplus.localization_engine.central"
-    private static let iwayplusManufacturerIds: Set<UInt16> = [1285, 4336, 2202]
 
     private var methodChannel: FlutterMethodChannel?
     private var eventChannel: FlutterEventChannel?
@@ -327,35 +326,22 @@ public final class LocalizationEnginePlugin: NSObject,
         rssi RSSI: NSNumber
     ) {
         guard isScanning, !stopIfDeadlineExpired() else { return }
-        guard
-            let manufacturerData =
-                advertisementData[CBAdvertisementDataManufacturerDataKey]
-                    as? Data,
-            let manufacturerId = manufacturerId(from: manufacturerData),
-            Self.iwayplusManufacturerIds.contains(manufacturerId)
-        else { return }
-
         let name = peripheral.name
             ?? advertisementData[CBAdvertisementDataLocalNameKey] as? String
             ?? ""
-        guard name.lowercased().hasPrefix("iw") else { return }
-
-        let payload = manufacturerData.dropFirst(2)
+        let manufacturerData =
+            advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data
+        let manufacturerHex = manufacturerData.map { data in
+            data.dropFirst(2).map { String(format: "%02X", $0) }.joined()
+        } ?? ""
         let event: [String: Any] = [
             "device": peripheral.identifier.uuidString,
             "name": name,
             "rssi": RSSI.intValue,
             "timestamp": Int(Date().timeIntervalSince1970 * 1000),
-            "manufacturerHex": payload.map { String(format: "%02X", $0) }
-                .joined(),
+            "manufacturerHex": manufacturerHex,
         ]
         eventSink?([event])
-    }
-
-    private func manufacturerId(from data: Data) -> UInt16? {
-        guard data.count >= 2 else { return nil }
-        return UInt16(data[data.startIndex])
-            | (UInt16(data[data.index(after: data.startIndex)]) << 8)
     }
 
     // MARK: - Core Location

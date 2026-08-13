@@ -12,12 +12,14 @@ class TrackingPayload {
   final int t;
   final Map<String, List<int?>> pts;
   final String venueName;
+  final Map<String, int>? surroundingDevices;
 
   TrackingPayload({
     required this.id,
     required this.t,
     required this.pts,
-    required this.venueName
+    required this.venueName,
+    this.surroundingDevices,
   });
 
   Map<String, dynamic> toJson() {
@@ -25,7 +27,8 @@ class TrackingPayload {
       'id': id,
       't': t,
       'pts': pts,
-      'buildingId': venueName
+      if (surroundingDevices != null) 'devices': surroundingDevices,
+      'buildingId': venueName,
     };
   }
 }
@@ -36,7 +39,6 @@ class TrackingPayload {
 
 class WebSocketService {
   static const String _eventName = 'send-tracking';
-
 
   IO.Socket? _socket;
   bool _isConnected = false;
@@ -113,9 +115,9 @@ class WebSocketService {
     final json = payload.toJson();
 
     if (_socket == null || !_isConnected) {
-      try{
+      try {
         connect();
-      }catch(e){
+      } catch (e) {
         print("error reconnecting to socket $e");
       }
       print('[WebSocket] ⚠️ Not connected. Storing event.');
@@ -139,7 +141,6 @@ class WebSocketService {
     print('[WebSocket] 🔌 Disconnected and cleaned up.');
   }
 }
-
 
 // ─────────────────────────────────────────────
 // Example usage (e.g., in main.dart or a widget)
