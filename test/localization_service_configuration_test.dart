@@ -8,6 +8,7 @@ void main() {
         venueName: 'Iwayplus',
         baseUrl: 'https://dev.iwayplus.in',
         mode: LocalizationMode.bothGPSandBLE,
+        surroundingDeviceScanInterval: Duration(seconds: 25),
       );
 
       final restored = LocalizationServiceConfiguration.fromJson(
@@ -18,6 +19,8 @@ void main() {
       expect(restored.baseUrl, configuration.baseUrl);
       expect(restored.mode, LocalizationMode.bothGPSandBLE);
       expect(restored.stopAt, isNull);
+      expect(
+          restored.surroundingDeviceScanInterval, const Duration(seconds: 25));
     });
 
     for (final mode in LocalizationMode.values) {
@@ -65,6 +68,19 @@ void main() {
         throwsFormatException,
       );
     });
+
+    test('rejects a non-positive surrounding-device interval', () {
+      expect(
+        () => LocalizationServiceConfiguration.fromJson(
+          const <String, Object?>{
+            'venueName': 'Iwayplus',
+            'mode': 'bothGPSandBLE',
+            'surroundingDeviceScanIntervalMs': 0,
+          },
+        ),
+        throwsFormatException,
+      );
+    });
   });
 
   group('LocalizationBackgroundService validation', () {
@@ -83,6 +99,16 @@ void main() {
         LocalizationBackgroundService.start(
           venueName: 'Iwayplus',
           duration: const Duration(seconds: -1),
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('rejects zero surrounding-device interval before platform access', () {
+      expect(
+        LocalizationBackgroundService.start(
+          venueName: 'Iwayplus',
+          surroundingDeviceScanInterval: Duration.zero,
         ),
         throwsArgumentError,
       );

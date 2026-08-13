@@ -18,19 +18,31 @@ void main() {
     expect(aggregator.takeMedianSnapshot(), isEmpty);
   });
 
-  test('nearby-device payload is separate from tracking payload', () {
-    const payload = SurroundingDevicesPayload(
-      scannerId: 'scanner-a',
-      timestamp: 1234,
-      devices: <String, int>{'device-a': -63},
+  test('nearby devices are included in the existing tracking payload', () {
+    final payload = TrackingPayload(
+      id: 'scanner-a',
+      t: 1234,
+      pts: const <String, List<int?>>{},
       venueName: 'Iwayplus',
+      surroundingDevices: const <String, int>{'device-a': -63},
     );
 
     expect(payload.toJson(), <String, dynamic>{
-      'scannerId': 'scanner-a',
-      'timestamp': 1234,
+      'id': 'scanner-a',
+      't': 1234,
+      'pts': <String, List<int?>>{},
       'devices': <String, int>{'device-a': -63},
       'buildingId': 'Iwayplus',
     });
+  });
+
+  test('tracking payload omits devices before an interval completes', () {
+    final payload = TrackingPayload(
+      id: 'scanner-a',
+      t: 1234,
+      pts: const <String, List<int?>>{},
+      venueName: 'Iwayplus',
+    );
+    expect(payload.toJson(), isNot(contains('devices')));
   });
 }

@@ -10,5 +10,9 @@ void main() {
     expect(find.text('GPS'), findsOneWidget);
     expect(find.text('BLE'), findsOneWidget);
     expect(find.text('Both'), findsOneWidget);
+    expect(
+      find.text('Surrounding-device scan interval (seconds)'),
+      findsOneWidget,
+    );
   });
 }

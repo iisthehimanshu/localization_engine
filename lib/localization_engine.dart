@@ -78,6 +78,13 @@ class LocalizationEngine {
   final DateTime? stopAt;
   final String? _baseURL;
 
+  /// BLE observation window used for surrounding-device RSSI aggregation.
+  ///
+  /// One median RSSI per non-`IW` advertiser is attached under `devices` to
+  /// the next `send-tracking` payload after each window. Platform identifiers
+  /// may rotate and must not be treated as permanent device identities.
+  final Duration surroundingDeviceScanInterval;
+
   bool get _usesGps => localizationMode != LocalizationMode.onlyBle;
   bool get _usesBle => localizationMode != LocalizationMode.onlyGps;
 
@@ -140,8 +147,16 @@ class LocalizationEngine {
     bool skipAdapterSetup = false,
     this.localizationMode = LocalizationMode.bothGPSandBLE,
     this.stopAt,
+    this.surroundingDeviceScanInterval = const Duration(seconds: 10),
   })  : _skipAdapterSetup = skipAdapterSetup,
         _baseURL = baseURL {
+    if (surroundingDeviceScanInterval <= Duration.zero) {
+      throw ArgumentError.value(
+        surroundingDeviceScanInterval,
+        'surroundingDeviceScanInterval',
+        'Must be greater than zero.',
+      );
+    }
     LocalizationEngine.floorConfig = floorConfig;
     AppConfig.url = baseURL;
     unawaited(init(venueName: venueName));
@@ -441,9 +456,9 @@ class LocalizationEngine {
   final _surroundingDeviceController =
       StreamController<Map<String, int>>.broadcast();
   Timer? _surroundingDeviceTimer;
-  Future<String>? _scannerDeviceId;
+  Map<String, int>? _pendingSurroundingDevices;
 
-  /// Median RSSI per BLE advertiser seen during each ten-second window.
+  /// Median RSSI per BLE advertiser seen during each configured window.
   ///
   /// Keys are platform BLE identifiers and are not permanent device IDs. This
   /// stream contains BLE advertisers of any kind; identifying host-app phones
@@ -453,34 +468,25 @@ class LocalizationEngine {
 
   void initSurroundingDeviceStream() {
     if (_surroundingDeviceTimer != null) return;
-    _scannerDeviceId ??= _getDeviceId();
     _surroundingDeviceTimer = Timer.periodic(
-      const Duration(seconds: 10),
-      (_) => unawaited(_emitSurroundingDeviceSnapshot()),
+      surroundingDeviceScanInterval,
+      (_) => _emitSurroundingDeviceSnapshot(),
     );
   }
 
-  Future<void> _emitSurroundingDeviceSnapshot() async {
+  void _emitSurroundingDeviceSnapshot() {
     final devices = _surroundingDeviceAggregator.takeMedianSnapshot();
     if (_isDisposed) return;
 
     _surroundingDeviceController.add(Map<String, int>.unmodifiable(devices));
-    final scannerId = await (_scannerDeviceId ??= _getDeviceId());
-    if (_isDisposed) return;
-    wsService.sendSurroundingDevices(
-      SurroundingDevicesPayload(
-        scannerId: scannerId,
-        timestamp: DateTime.now().millisecondsSinceEpoch,
-        devices: devices,
-        venueName: _venueName,
-      ),
-    );
+    _pendingSurroundingDevices = Map<String, int>.unmodifiable(devices);
   }
 
   void _stopSurroundingDeviceStream() {
     _surroundingDeviceTimer?.cancel();
     _surroundingDeviceTimer = null;
     _surroundingDeviceAggregator.clear();
+    _pendingSurroundingDevices = null;
   }
 
   final _estimatorLocationController =
@@ -890,10 +896,17 @@ class LocalizationEngine {
             ],
         },
         venueName: _venueName,
+        surroundingDevices: _takePendingSurroundingDevices(),
       );
 
       wsService.sendTracking(payload);
     });
+  }
+
+  Map<String, int>? _takePendingSurroundingDevices() {
+    final devices = _pendingSurroundingDevices;
+    _pendingSurroundingDevices = null;
+    return devices;
   }
 
   /// Fetches the venue's configured beacons (cache-first) for rendering or

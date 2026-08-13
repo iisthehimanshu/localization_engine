@@ -39,6 +39,7 @@ class _LocalizationServicePageState extends State<LocalizationServicePage> {
     text: 'https://dev.iwayplus.in',
   );
   final _durationController = TextEditingController(text: '30');
+  final _surroundingScanIntervalController = TextEditingController(text: '10');
 
   LocalizationMode _selectedMode = LocalizationMode.bothGPSandBLE;
   LocalizationServiceConfiguration? _activeConfiguration;
@@ -64,6 +65,7 @@ class _LocalizationServicePageState extends State<LocalizationServicePage> {
     _venueController.dispose();
     _baseUrlController.dispose();
     _durationController.dispose();
+    _surroundingScanIntervalController.dispose();
     super.dispose();
   }
 
@@ -80,6 +82,10 @@ class _LocalizationServicePageState extends State<LocalizationServicePage> {
         _activeConfiguration = configuration;
         _remainingDuration = remaining;
         if (configuration != null) _selectedMode = configuration.mode;
+        if (configuration != null && running) {
+          _surroundingScanIntervalController.text =
+              configuration.surroundingDeviceScanInterval.inSeconds.toString();
+        }
         _error = null;
       });
     } catch (error) {
@@ -101,6 +107,21 @@ class _LocalizationServicePageState extends State<LocalizationServicePage> {
     return Duration(minutes: minutes);
   }
 
+  Duration _readSurroundingScanInterval() {
+    if (_selectedMode == LocalizationMode.onlyGps) {
+      return const Duration(seconds: 10);
+    }
+    final seconds = int.tryParse(
+      _surroundingScanIntervalController.text.trim(),
+    );
+    if (seconds == null || seconds <= 0) {
+      throw const FormatException(
+        'Enter a positive surrounding-device scan interval in seconds.',
+      );
+    }
+    return Duration(seconds: seconds);
+  }
+
   Future<void> _startService() async {
     FocusManager.instance.primaryFocus?.unfocus();
     setState(() {
@@ -115,6 +136,7 @@ class _LocalizationServicePageState extends State<LocalizationServicePage> {
             : _baseUrlController.text.trim(),
         mode: _selectedMode,
         duration: _readDuration(),
+        surroundingDeviceScanInterval: _readSurroundingScanInterval(),
       );
       await _refreshServiceState(showBusy: false);
     } catch (error) {
@@ -225,6 +247,19 @@ class _LocalizationServicePageState extends State<LocalizationServicePage> {
               decoration: const InputDecoration(
                 labelText: 'Run duration (minutes)',
                 hintText: 'Leave blank to run indefinitely',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _surroundingScanIntervalController,
+              enabled: !_isBusy && _selectedMode != LocalizationMode.onlyGps,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Surrounding-device scan interval (seconds)',
+                helperText:
+                    'Median RSSI is collected for this period and attached '
+                    'once to the next tracking payload.',
                 border: OutlineInputBorder(),
               ),
             ),

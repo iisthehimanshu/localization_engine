@@ -120,6 +120,7 @@ LocalizationEngine(
   Map<String, Map<int, Map<String, dynamic>>>? floorConfig,
   bool skipAdapterSetup = false,
   LocalizationMode localizationMode = LocalizationMode.bothGPSandBLE,
+  Duration surroundingDeviceScanInterval = const Duration(seconds: 10),
 })
 ```
 
@@ -130,6 +131,7 @@ LocalizationEngine(
 | `floorConfig`      | `Map<String, Map<int, Map<String, dynamic>>>?` | Per-building, per-floor tuning thresholds (see [Floor Config](#floor-config)). |
 | `skipAdapterSetup` | `bool`                                         | Skip permission and adapter prompts when a foreground isolate has already completed setup. Native scans still follow `localizationMode`. |
 | `localizationMode` | `LocalizationMode`                             | Select GPS only, BLE only, or both. Defaults to `bothGPSandBLE`. |
+| `surroundingDeviceScanInterval` | `Duration` | Positive RSSI aggregation window for non-`IW` BLE advertisers. Defaults to 10 seconds. |
 
 Constructing the engine triggers, in order:
 
@@ -138,6 +140,33 @@ Constructing the engine triggers, in order:
 3. Native scans and event streams for only the selected sensors.
 4. The location resolution loop.
 5. WebSocket connection for live tracking.
+
+### Surrounding BLE devices
+
+When BLE is enabled, `surroundingDeviceSnapshots` emits one map after every
+`surroundingDeviceScanInterval`. Each map contains one median RSSI measurement
+per non-`IW` BLE advertiser found during that window:
+
+```dart
+final engine = LocalizationEngine(
+  'Iwayplus',
+  surroundingDeviceScanInterval: const Duration(seconds: 20),
+);
+
+engine.surroundingDeviceSnapshots.listen((devices) {
+  // Example: {'A1:B2:C3:D4:E5:F6': -63}
+});
+```
+
+The completed map is attached once to the next existing `send-tracking`
+payload as `devices: {deviceId: rssi}`. Tracking messages sent before the
+window completes omit `devices`, so stale snapshots are not repeated. The
+interval must be greater than zero and is persisted for background sessions.
+
+These keys are platform BLE identifiers, not permanent IDs, and may rotate.
+The generic scan also cannot prove an advertiser is a phone. Identifying only
+other host-app installations requires a dedicated advertised BLE service UUID
+and an application-controlled rotating token.
 
 ```dart
 final gpsEngine = LocalizationEngine(

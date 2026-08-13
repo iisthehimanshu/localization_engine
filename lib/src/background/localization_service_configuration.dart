@@ -7,18 +7,22 @@ class LocalizationServiceConfiguration {
     required this.mode,
     this.baseUrl,
     this.stopAt,
+    this.surroundingDeviceScanInterval = const Duration(seconds: 10),
   });
 
   final String venueName;
   final String? baseUrl;
   final LocalizationMode mode;
   final DateTime? stopAt;
+  final Duration surroundingDeviceScanInterval;
 
   Map<String, Object?> toJson() => <String, Object?>{
         'venueName': venueName,
         'baseUrl': baseUrl,
         'mode': mode.name,
         'stopAt': stopAt?.millisecondsSinceEpoch,
+        'surroundingDeviceScanIntervalMs':
+            surroundingDeviceScanInterval.inMilliseconds,
       };
 
   factory LocalizationServiceConfiguration.fromJson(
@@ -28,6 +32,8 @@ class LocalizationServiceConfiguration {
     final baseUrl = json['baseUrl'];
     final modeName = json['mode'];
     final stopAtMilliseconds = json['stopAt'];
+    final surroundingIntervalMilliseconds =
+        json['surroundingDeviceScanIntervalMs'] ?? 10000;
 
     if (venueName is! String || venueName.trim().isEmpty) {
       throw const FormatException('venueName must be a non-empty string.');
@@ -40,6 +46,12 @@ class LocalizationServiceConfiguration {
     }
     if (stopAtMilliseconds != null && stopAtMilliseconds is! int) {
       throw const FormatException('stopAt must be an integer or null.');
+    }
+    if (surroundingIntervalMilliseconds is! int ||
+        surroundingIntervalMilliseconds <= 0) {
+      throw const FormatException(
+        'surroundingDeviceScanIntervalMs must be a positive integer.',
+      );
     }
 
     final mode = LocalizationMode.values.where(
@@ -56,6 +68,8 @@ class LocalizationServiceConfiguration {
       stopAt: stopAtMilliseconds == null
           ? null
           : DateTime.fromMillisecondsSinceEpoch(stopAtMilliseconds as int),
+      surroundingDeviceScanInterval:
+          Duration(milliseconds: surroundingIntervalMilliseconds),
     );
   }
 }
