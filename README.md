@@ -118,22 +118,104 @@ LocalizationEngine(
   String venueName, {
   String? baseURL,
   Map<String, Map<int, Map<String, dynamic>>>? floorConfig,
+  bool skipAdapterSetup = false,
+  LocalizationMode localizationMode = LocalizationMode.bothGPSandBLE,
+  Duration surroundingDeviceScanInterval = const Duration(seconds: 10),
 })
 ```
 
-| Parameter     | Type                                              | Description                                                                                                              |
-| ------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `venueName`   | `String` (required)                               | Identifier for the venue. Used to fetch the beacon map from the backend and as the building id in tracking payloads.    |
-| `baseURL`     | `String?`                                         | Override the backend base URL. Defaults to `https://dev.iwayplus.in` in debug and `https://maps.iwayplus.in` in release.|
-| `floorConfig` | `Map<String, Map<int, Map<String, dynamic>>>?`    | Per-building, per-floor tuning thresholds (see [Floor Config](#floor-config)).                                          |
+| Parameter          | Type                                           | Description |
+| ------------------ | ---------------------------------------------- | ----------- |
+| `venueName`        | `String` (required)                            | Tracking context for every mode. The beacon map is fetched for this venue only when BLE is enabled. |
+| `baseURL`          | `String?`                                      | Override the backend base URL. Defaults to `https://dev.iwayplus.in` in debug and `https://maps.iwayplus.in` in release. |
+| `floorConfig`      | `Map<String, Map<int, Map<String, dynamic>>>?` | Per-building, per-floor tuning thresholds (see [Floor Config](#floor-config)). |
+| `skipAdapterSetup` | `bool`                                         | Skip permission and adapter prompts when a foreground isolate has already completed setup. Native scans still follow `localizationMode`. |
+| `localizationMode` | `LocalizationMode`                             | Select GPS only, BLE only, or both. Defaults to `bothGPSandBLE`. |
+| `surroundingDeviceScanInterval` | `Duration` | Positive RSSI aggregation window for non-`IW` BLE advertisers. Defaults to 10 seconds. |
 
 Constructing the engine triggers, in order:
 
-1. Permission + adapter setup via `adapter_manager`.
-2. Venue beacon-map fetch from the backend.
-3. BLE + GPS native scans (method/event channels).
+1. Permission and adapter setup for the sensors selected by `localizationMode`.
+2. Venue beacon-map fetch when BLE is selected.
+3. Native scans and event streams for only the selected sensors.
 4. The location resolution loop.
 5. WebSocket connection for live tracking.
+
+### Surrounding BLE devices
+
+When BLE is enabled, `surroundingDeviceSnapshots` emits one map after every
+`surroundingDeviceScanInterval`. Each map contains one median RSSI measurement
+per non-`IW` BLE advertiser found during that window:
+
+```dart
+final engine = LocalizationEngine(
+  'Iwayplus',
+  surroundingDeviceScanInterval: const Duration(seconds: 20),
+);
+
+engine.surroundingDeviceSnapshots.listen((devices) {
+  // Example: {'A1:B2:C3:D4:E5:F6': -63}
+});
+```
+
+The completed map is attached once to the next existing `send-tracking`
+payload as `devices: {deviceId: rssi}`. Tracking messages sent before the
+window completes omit `devices`, so stale snapshots are not repeated. The
+interval must be greater than zero and is persisted for background sessions.
+
+These keys are platform BLE identifiers, not permanent IDs, and may rotate.
+The generic scan also cannot prove an advertiser is a phone. Identifying only
+other host-app installations requires a dedicated advertised BLE service UUID
+and an application-controlled rotating token.
+
+```dart
+final gpsEngine = LocalizationEngine(
+  'IITDelhi',
+  localizationMode: LocalizationMode.onlyGps,
+);
+
+final bleEngine = LocalizationEngine(
+  'IITDelhi',
+  localizationMode: LocalizationMode.onlyBle,
+);
+```
+
+## Background localization
+
+Use `LocalizationBackgroundService` when localization must continue in an
+Android foreground-service isolate. Permission and adapter prompts are handled
+in the foreground before the service starts, while the background isolate
+restores the persisted venue, mode, base URL, and absolute stop deadline.
+
+```dart
+await LocalizationBackgroundService.start(
+  venueName: 'Iwayplus',
+  baseUrl: 'https://dev.iwayplus.in',
+  mode: LocalizationMode.bothGPSandBLE,
+  duration: const Duration(minutes: 30),
+);
+
+final running = await LocalizationBackgroundService.isRunning;
+final configuration =
+    await LocalizationBackgroundService.activeConfiguration;
+final remaining = await LocalizationBackgroundService.remainingDuration;
+
+await LocalizationBackgroundService.stop();
+```
+
+Omit `duration` to run indefinitely. Zero and negative durations are rejected.
+Calling `stop()` repeatedly is safe, and a repeated `start()` replaces the
+currently running service configuration.
+
+### iOS host configuration
+
+An iOS host must enable the **Location updates**, **Uses Bluetooth LE
+accessories**, and **Background fetch** background modes and provide location
+and Bluetooth usage descriptions. The bundled example contains the required
+`Info.plist` entries. GPS uses native Core Location background delivery; BLE
+uses Core Bluetooth state restoration and best-effort background discovery.
+iOS controls BLE discovery frequency and does not relaunch an app after the
+user explicitly force-quits it.
 
 ---
 
