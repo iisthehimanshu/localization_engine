@@ -891,7 +891,7 @@ class LocalizationEngine {
               null,
               int.parse(gpsLocation.latitude.toString().replaceAll('.', '')),
               int.parse(gpsLocation.longitude.toString().replaceAll('.', '')),
-              beaconLocation?.floor,
+              beaconLocation?.floor??0,
               2,
             ],
         },
