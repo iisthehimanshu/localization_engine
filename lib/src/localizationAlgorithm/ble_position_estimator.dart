@@ -149,9 +149,9 @@ class BLEPositionEstimator {
   static const double _continuityBonus  = 0.5;   // dBm bonus for repeat beacons
   static const double _rssiGapThresh    = 8.0;   // heuristic walking signal
   static const double _posDeltaThresh   = 12.0;  // heuristic walking signal (px)
-  static const double _alphaStationary  = 0.25;  // EMA α stationary
+  static const double _alphaStationary  = 0.5;  // EMA α stationary
   static const double _alphaWalking     = 0.7;  // EMA α walking
-  static const double _maxJumpStat      = 3.0;   // max px/update stationary ~0.75m
+  static const double _maxJumpStat      = 16.0;   // max px/update stationary ~4m
   static const double _maxJumpWalk      = 24.0;  // max px/update walking    ~6m
   static const int    _rssiMin          = -110;
   static const int    _rssiMax          = -55;

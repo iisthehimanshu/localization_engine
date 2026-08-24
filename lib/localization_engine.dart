@@ -120,6 +120,27 @@ class LocalizationEngine {
   /// across collection windows. Lazily created once the beacon map is loaded.
   BLEPositionEstimator? _positionEstimator;
 
+  bool _isWalking = false;
+
+  /// Whether the integrating app currently considers the user to be walking /
+  /// navigating. Forwarded to [BLEPositionEstimator.update] as its `walking`
+  /// override, which picks the walking (responsive) vs. stationary (heavily
+  /// smoothed) filtering profile.
+  ///
+  /// Defaults to `false`; toggle it at runtime with [setWalking].
+  bool get isWalking => _isWalking;
+
+  /// Sets the walking/stationary hint used by [BLEPositionEstimator].
+  ///
+  /// Call this from the app whenever navigation starts or stops, e.g.
+  /// `engine.setWalking(true)` when a route begins and
+  /// `engine.setWalking(false)` when it ends or the user goes idle. The new
+  /// value applies to the next position update on both the main location loop
+  /// and [estimatorLocationStream].
+  void setWalking(bool walking) {
+    _isWalking = walking;
+  }
+
   /// Per-building, per-floor tuning thresholds, keyed as
   /// `buildingId -> floor -> settingName -> value`.
   ///
@@ -763,7 +784,7 @@ class LocalizationEngine {
       }
     });
 
-    final pos = activeEstimator.update(readings, walking: true);
+    final pos = activeEstimator.update(readings, walking: _isWalking);
     if (pos == null) return null;
 
     final rank1 = localization.apibeaconmap[pos.rank1Beacon];
