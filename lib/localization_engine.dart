@@ -385,6 +385,13 @@ class LocalizationEngine {
     await _gpsSubscription?.cancel();
     _gpsSubscription = null;
     _isScanning = false;
+    // A restart rebuilds every stream a simulation was riding on, so the flag
+    // must not survive it — otherwise live BLE stays gated off with nothing
+    // left to inject in its place.
+    if (_isSimulating) {
+      _isSimulating = false;
+      print('LocalizationEngine: simulation cleared by scan teardown');
+    }
   }
 
   /// Permanently stops this engine and releases its Dart and native resources.
@@ -446,6 +453,9 @@ class LocalizationEngine {
     _bleSubscription ??=
         _bleEventChannel.receiveBroadcastStream().listen((event) {
       try {
+        // Simulation owns the stream while it runs: a replayed walk must not
+        // be corrected by beacons the phone can actually hear right now.
+        if (_isSimulating) return;
         final List<dynamic> rawList = event as List;
         for (var entry in rawList) {
           final map = Map<String, dynamic>.from(entry);
@@ -471,6 +481,191 @@ class LocalizationEngine {
     }, onError: (error) {
       print('bleStream error: $error');
     });
+  }
+
+  // ── Simulation / recorded-log replay ──────────────────────────────────
+
+  bool _isSimulating = false;
+
+  /// True while [injectBleScan] is the only thing feeding
+  /// [bluetoothScanResults]. See [startSimulation].
+  bool get isSimulating => _isSimulating;
+
+  /// Hands the BLE input over to [injectBleScan] so a recorded session can be
+  /// pushed through the real pipeline — [bluetoothScanResults], the per-second
+  /// estimator loop, and out of [estimatorLocationStream] — instead of the
+  /// consumer replaying the *decisions* a recording happened to reach.
+  ///
+  /// The native scanner keeps running (stopping it would need a full
+  /// [restart] to come back); its readings are dropped at the stream boundary
+  /// while simulating, so beacons the phone can really hear cannot correct a
+  /// walk that was recorded somewhere else.
+  ///
+  /// Loads the venue beacon map first if startup never got that far. A
+  /// simulation brings its own readings, so it needs neither radio — but
+  /// [_startScanning] sets the adapters up *before* it loads the beacon map,
+  /// and throws when Bluetooth or location services are off. That leaves
+  /// [_localization] null, and a null beacon map means the estimator has
+  /// nothing to place a reading against: every fix comes back null, however
+  /// good the injected data is. Loading it here is a plain network fetch and
+  /// needs no adapter, so a replay runs on a phone with both radios switched
+  /// off — which is the whole point of testing at a desk.
+  Future<void> startSimulation() async {
+    if (_isSimulating) return;
+    _isSimulating = true;
+    if (_localization == null) {
+      print('LocalizationEngine: simulation needs the venue beacon map and '
+          'startup never loaded it (adapters off?) — fetching it now');
+      try {
+        await _initializeBleVenue();
+      } catch (error) {
+        print('LocalizationEngine: simulation could not load the beacon map '
+            'for "$_venueName": $error — every fix will be null');
+      }
+    }
+    // Whatever the estimator has buffered describes where the phone actually
+    // is. A replay begins somewhere else, so that state is not just stale, it
+    // is wrong.
+    resetEstimatorStream();
+    initEstimatorLocationStream();
+    print('LocalizationEngine: simulation ON — live BLE dropped, '
+        'injectBleScan drives estimatorLocationStream '
+        '(${_localization?.apibeaconmap.length ?? 0} beacons)');
+  }
+
+  /// Returns the engine to live scanning and clears the estimator state the
+  /// replay built up.
+  void stopSimulation() {
+    if (!_isSimulating) return;
+    _isSimulating = false;
+    resetEstimatorStream();
+    print('LocalizationEngine: simulation OFF — live BLE resumed');
+  }
+
+  /// Feeds one recorded BLE reading into [bluetoothScanResults] as though the
+  /// scanner had just reported it. No-op unless [startSimulation] was called.
+  ///
+  /// [scan] takes the shape the native scanner emits and the shape a session
+  /// log records under `scanData`: at minimum `name` (an `IW…` beacon) and
+  /// `rssi`. The same name/RSSI gate as the live path applies, so a replay
+  /// sees exactly the readings a live run would have seen.
+  ///
+  /// The reading is stamped with [timestamp], defaulting to now. A replay
+  /// passes the instant its schedule says the reading was due — the recorded
+  /// detection times mapped onto this run by a single offset — so every gap
+  /// between readings is the one the beacons were really heard at, down to the
+  /// milliseconds between two beacons in the same scan flush. The recorded
+  /// value itself cannot be used directly: the estimator evicts on a rolling
+  /// window measured against the wall clock, so a stamp from the day of the
+  /// recording would be discarded the moment it arrived. It is preserved under
+  /// `recordedTimestamp`.
+  ///
+  /// Returns whether the reading was accepted.
+  bool injectBleScan(Map<String, dynamic> scan, {DateTime? timestamp}) {
+    if (!_isSimulating) {
+      print('injectBleScan ignored: call startSimulation() first');
+      return false;
+    }
+    if (_isDisposed || _bleController.isClosed) return false;
+
+    final name = scan['name'];
+    if (name is! String || !name.toLowerCase().startsWith('iw')) {
+      _simRejected++;
+      return false;
+    }
+
+    final rawRssi = scan['rssi'];
+    final num? rssi =
+        rawRssi is num ? rawRssi : num.tryParse(rawRssi?.toString() ?? '');
+    if (rssi == null) {
+      _simRejected++;
+      return false;
+    }
+    final double magnitude = rssi.abs().toDouble();
+    if (magnitude < 50 || magnitude > 110) {
+      _simRejected++;
+      return false;
+    }
+
+    final DateTime at = timestamp ?? DateTime.now();
+    final reading = Map<String, dynamic>.from(scan)
+      ..['rssi'] = rssi.round()
+      ..['timestamp'] = at.millisecondsSinceEpoch
+      ..['simulated'] = true;
+    final recorded = scan['timestamp'];
+    if (recorded != null) reading['recordedTimestamp'] = recorded;
+
+    _bleController.add(reading);
+    _simInjected++;
+    return true;
+  }
+
+  int _simInjected = 0;
+  int _simRejected = 0;
+
+  /// Says, once a second while simulating, which gate a missing fix died at.
+  ///
+  /// Every tick of the estimator loop can come back null, and the reason is
+  /// one of five very different things — nothing injected, the beacons are not
+  /// in this venue's map, they are in it but carry no floor-plan coordinates,
+  /// or the readings were fine and the algorithm itself declined. Reading that
+  /// off a silent null stream is guesswork, so it is spelled out here.
+  void _logSimulationTick(
+      Map<String, List<MapEntry<DateTime, int>>> grouped,
+      BeaconPointLocation? fix) {
+    final injected = _simInjected;
+    final rejected = _simRejected;
+    _simInjected = 0;
+    _simRejected = 0;
+
+    final db = _localization?.apibeaconmap;
+    if (db == null) {
+      print('sim tick: venue beacon map not loaded — every fix will be null');
+      return;
+    }
+
+    final unknown = <String>[];
+    final noCoords = <String>[];
+    final usable = <String>[];
+    for (final name in grouped.keys) {
+      final b = db[name];
+      if (b == null) {
+        unknown.add(name);
+      } else if (b.coordinateX == null ||
+          b.coordinateY == null ||
+          b.floor == null ||
+          b.buildingID == null) {
+        noCoords.add(name);
+      } else {
+        usable.add(name);
+      }
+    }
+    final readings =
+        grouped.values.fold<int>(0, (n, entries) => n + entries.length);
+
+    final outcome = fix == null
+        ? (usable.isEmpty
+            ? 'NO FIX — nothing usable reached the estimator'
+            : 'NO FIX — estimator declined on ${usable.length} usable beacon(s)')
+        : 'fix ${fix.bid}/${fix.floor} on ${fix.beacons.first} (${fix.rssi})';
+
+    print('sim tick: injected $injected'
+        '${rejected > 0 ? ' (+$rejected rejected)' : ''}'
+        ', $readings readings / ${grouped.length} beacons'
+        ' · usable ${usable.length}$usable'
+        '${unknown.isEmpty ? '' : ' · NOT IN VENUE MAP ${unknown.length}$unknown'}'
+        '${noCoords.isEmpty ? '' : ' · NO COORDINATES ${noCoords.length}$noCoords'}'
+        ' -> $outcome');
+  }
+
+  /// Rebuilds the estimator behind [estimatorLocationStream], dropping its
+  /// rolling window, EMA position and floor memory. Call it when the readings
+  /// about to arrive belong to a different walk than the ones already in it.
+  void resetEstimatorStream() {
+    final localization = _localization;
+    _estimatorStreamEstimator = localization == null
+        ? null
+        : BLEPositionEstimator(beaconDb: localization.apibeaconmap);
   }
 
   final _surroundingDeviceAggregator = SurroundingDeviceRssiAggregator();
@@ -555,10 +750,18 @@ class LocalizationEngine {
       final batch = List<Map<String, dynamic>>.from(buffer);
       buffer.clear();
 
+      // The loop can outlive the state it was built on: it is started before
+      // the venue is guaranteed loaded, and `??=` in the setup below leaves a
+      // null estimator behind for good if the map was not ready then.
+      if (_estimatorStreamEstimator == null && _localization != null) {
+        resetEstimatorStream();
+      }
       final scanData = groupByDevice(batch);
       final filteredData = _localization?.filterBeacons(scanData) ?? scanData;
-      _estimatorLocationController.add(_resolveWithEstimator(filteredData,
-          estimator: _estimatorStreamEstimator));
+      final fix = _resolveWithEstimator(filteredData,
+          estimator: _estimatorStreamEstimator);
+      if (_isSimulating) _logSimulationTick(scanData, fix);
+      _estimatorLocationController.add(fix);
     });
   }
 
