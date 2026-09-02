@@ -252,6 +252,7 @@ class BLEPositionEstimator {
     this.floor,
     this.building,
     DateTime Function()? clock,
+    Map<String, Map<int, Map<String, Set<String>>>>? connectorAnchors
   }) : _clock = clock ?? DateTime.now;
 
   /// Injectable wall clock. Defaults to [DateTime.now]; override it so the

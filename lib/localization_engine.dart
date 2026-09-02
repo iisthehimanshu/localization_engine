@@ -526,6 +526,7 @@ class LocalizationEngine {
     // Whatever the estimator has buffered describes where the phone actually
     // is. A replay begins somewhere else, so that state is not just stale, it
     // is wrong.
+    _resetSimulationBatching();
     resetEstimatorStream();
     initEstimatorLocationStream();
     print('LocalizationEngine: simulation ON — live BLE dropped, '
@@ -537,7 +538,12 @@ class LocalizationEngine {
   /// replay built up.
   void stopSimulation() {
     if (!_isSimulating) return;
+    // Whatever is in the open bucket is a real second of the recording, so it
+    // is resolved before the run is declared over — otherwise the last fix of
+    // every replay is silently dropped.
+    if (_simBuffer.isNotEmpty) _simulationFlush(_simBucket);
     _isSimulating = false;
+    _resetSimulationBatching();
     resetEstimatorStream();
     print('LocalizationEngine: simulation OFF — live BLE resumed');
   }
@@ -597,7 +603,101 @@ class LocalizationEngine {
 
     _bleController.add(reading);
     _simInjected++;
+    _simulationIngest(reading, at);
     return true;
+  }
+
+  // ── Deterministic batching for a simulation ───────────────────────────
+  //
+  // Live, the estimator loop cuts a batch every wall-clock second and a
+  // reading joins whichever bucket happens to be open when it arrives. That is
+  // right for a real scanner and wrong for a replay: the timer's phase is set
+  // when the loop starts, at an arbitrary offset from the recording's own
+  // schedule, so a reading due a millisecond before a boundary on one run
+  // falls after it on the next and lands in a different batch. Two replays of
+  // one file then disagree — measured at 0.68m median and 5m at p90, with the
+  // very first fix already resolving to a different beacon — which is enough
+  // to bury the effect of an algorithm change you are trying to measure.
+  //
+  // So while simulating, the buckets are cut on the *readings'* own clock,
+  // anchored to the first reading of the run. Bucket membership is then a pure
+  // function of the recorded spacing: identical on every replay of a file, at
+  // any playback speed, however much the driver jitters.
+
+  static const Duration _simBatchInterval = Duration(seconds: 1);
+
+  /// Timestamp of the first reading injected this run — the origin of the
+  /// bucket grid.
+  DateTime? _simBatchAnchor;
+
+  /// Index of the bucket currently accepting readings.
+  int _simBucket = 0;
+
+  final List<Map<String, dynamic>> _simBuffer = [];
+
+  /// The instant the estimator should believe it is, while a simulation batch
+  /// is being resolved. Null outside a simulation, where the estimator reads
+  /// the real clock.
+  DateTime? _simClock;
+
+  void _simulationIngest(Map<String, dynamic> reading, DateTime at) {
+    final anchor = _simBatchAnchor ??= at;
+    final bucket =
+        at.difference(anchor).inMicroseconds ~/ _simBatchInterval.inMicroseconds;
+    // Closing a bucket is driven by the arrival of a reading that belongs to a
+    // later one, so a silent stretch in the recording closes every bucket it
+    // spans at once. Those empty buckets are emitted, not skipped: a second
+    // that resolved nothing is a result, and dropping them would make a sparse
+    // recording look like a dense one.
+    while (_simBucket < bucket) {
+      _simulationFlush(_simBucket);
+      _simBucket++;
+    }
+    _simBuffer.add(reading);
+  }
+
+  /// Resolves one bucket and emits its result on [estimatorLocationStream].
+  void _simulationFlush(int bucket) {
+    final anchor = _simBatchAnchor;
+    if (anchor == null) return;
+    // The instant the bucket closed, mirroring the live loop, whose timer
+    // fires at the end of the second it collected.
+    final closedAt = anchor.add(_simBatchInterval * (bucket + 1));
+    final batch = List<Map<String, dynamic>>.from(_simBuffer);
+    _simBuffer.clear();
+
+    _simClock = closedAt;
+    if (_estimatorStreamEstimator == null && _localization != null) {
+      resetEstimatorStream();
+    }
+    final scanData = groupByDevice(batch);
+    final filteredData = _localization?.filterBeacons(scanData) ?? scanData;
+    final fix = _resolveWithEstimator(filteredData,
+        estimator: _estimatorStreamEstimator, now: closedAt);
+    _logSimulationTick(scanData, fix);
+    _estimatorLocationController.add(fix);
+  }
+
+  /// The recorded instant of the bucket being resolved right now, or null
+  /// outside a simulation.
+  DateTime? get simulationClock => _simClock;
+
+  /// How far into the run that bucket closed.
+  ///
+  /// This is the value to key a replay's output on when comparing two runs:
+  /// it counts from the run's own first reading, so it is identical on every
+  /// replay of a file, while the wall-clock instant obviously is not.
+  Duration? get simulationElapsed {
+    final clock = _simClock, anchor = _simBatchAnchor;
+    if (clock == null || anchor == null) return null;
+    return clock.difference(anchor);
+  }
+
+  void _resetSimulationBatching() {
+    _simBatchAnchor = null;
+    _simBucket = 0;
+    _simBuffer.clear();
+    _simClock = null;
   }
 
   int _simInjected = 0;
@@ -665,7 +765,82 @@ class LocalizationEngine {
     final localization = _localization;
     _estimatorStreamEstimator = localization == null
         ? null
-        : BLEPositionEstimator(beaconDb: localization.apibeaconmap);
+        : BLEPositionEstimator(
+            beaconDb: localization.apibeaconmap,
+            connectorAnchors: _connectorAnchors,
+            // Reads the recorded instant while a simulation is running, so the
+            // estimator's own clock reads (the connector lock's expiry, the
+            // proximity timers) advance with the recording too — not just the
+            // `now` handed to update(). Falls through to the real clock live.
+            clock: () => _simClock ?? DateTime.now(),
+          );
+  }
+
+  Map<String, Map<int, Map<String, Set<String>>>>? _connectorAnchors;
+
+  /// The connector anchors the estimators are currently built with, or null
+  /// while they are deriving their own. See [setConnectorAnchors].
+  Map<String, Map<int, Map<String, Set<String>>>>? get connectorAnchors =>
+      _connectorAnchors;
+
+  /// Supplies `{building: {floor: {connectorId: beacon names}}}` for the lift /
+  /// escalator / stairs anchors, overriding what [BLEPositionEstimator] would
+  /// derive on its own.
+  ///
+  /// Left unset, the estimator reads the connector off each *beacon*
+  /// (`element.subType` and friends). Venues that tag their connectors on
+  /// landmarks instead leave those beacon fields empty, so that derivation
+  /// yields nothing and the post-floor-change connector lock never engages.
+  /// The host app knows its landmarks, so it can build the map properly and
+  /// hand it over here.
+  ///
+  /// Pass null to go back to the estimator's own derivation.
+  ///
+  /// An estimator bakes its anchors in at construction, so both are rebuilt —
+  /// which costs their rolling window and EMA state. Identical anchors are
+  /// therefore ignored rather than re-applied: this is safe to call on every
+  /// navigation start without resetting a walk in progress.
+  void setConnectorAnchors(
+      Map<String, Map<int, Map<String, Set<String>>>>? anchors) {
+    if (_sameConnectorAnchors(_connectorAnchors, anchors)) return;
+    _connectorAnchors = anchors;
+    // Dropped rather than rebuilt: the main loop's estimator is created lazily
+    // on its next fix, and doing it here would build one before the beacon map
+    // is necessarily loaded.
+    _positionEstimator = null;
+    resetEstimatorStream();
+    final connectors = anchors == null
+        ? 0
+        : anchors.values
+            .expand((floors) => floors.values)
+            .fold<int>(0, (n, groups) => n + groups.length);
+    print('LocalizationEngine: connector anchors set — '
+        '${anchors == null ? "cleared, estimator derives its own" : "$connectors connectors across ${anchors.length} building(s)"}');
+  }
+
+  bool _sameConnectorAnchors(
+      Map<String, Map<int, Map<String, Set<String>>>>? a,
+      Map<String, Map<int, Map<String, Set<String>>>>? b) {
+    if (identical(a, b)) return true;
+    if (a == null || b == null) return false;
+    if (a.length != b.length) return false;
+    for (final building in a.entries) {
+      final other = b[building.key];
+      if (other == null || other.length != building.value.length) return false;
+      for (final floor in building.value.entries) {
+        final otherGroups = other[floor.key];
+        if (otherGroups == null || otherGroups.length != floor.value.length) {
+          return false;
+        }
+        for (final group in floor.value.entries) {
+          final otherNames = otherGroups[group.key];
+          if (otherNames == null ||
+              otherNames.length != group.value.length ||
+              !otherNames.containsAll(group.value)) return false;
+        }
+      }
+    }
+    return true;
   }
 
   final _surroundingDeviceAggregator = SurroundingDeviceRssiAggregator();
@@ -736,16 +911,24 @@ class LocalizationEngine {
     final localization = _localization;
     _estimatorStreamEstimator ??= localization == null
         ? null
-        : BLEPositionEstimator(beaconDb: localization.apibeaconmap);
+        : BLEPositionEstimator(
+            beaconDb: localization.apibeaconmap,
+            connectorAnchors: _connectorAnchors,
+            clock: () => _simClock ?? DateTime.now(),
+          );
 
     // Buffer of readings received during the current 1-second interval.
     final List<Map<String, dynamic>> buffer = [];
 
     _estimatorBleSubscription = bluetoothScanResults.listen((data) {
-      if (data != null) buffer.add(data);
+      // A simulation cuts its own batches on the recorded clock — see
+      // [_simulationIngest]. Buffering here as well would hand the same
+      // readings to the estimator twice.
+      if (data != null && !_isSimulating) buffer.add(data);
     });
 
     _estimatorTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_isSimulating) return;
       // Snapshot and clear the previous second's readings atomically.
       final batch = List<Map<String, dynamic>>.from(buffer);
       buffer.clear();
@@ -970,14 +1153,16 @@ class LocalizationEngine {
   /// used.
   BeaconPointLocation? _resolveWithEstimator(
       Map<String, List<MapEntry<DateTime, int>>> filteredData,
-      {BLEPositionEstimator? estimator}) {
+      {BLEPositionEstimator? estimator, DateTime? now}) {
     final localization = _localization;
     if (localization == null) return null;
 
     // Lazily build the estimator over the loaded beacon map.
     final activeEstimator = estimator ??
-        (_positionEstimator ??=
-            BLEPositionEstimator(beaconDb: localization.apibeaconmap));
+        (_positionEstimator ??= BLEPositionEstimator(
+          beaconDb: localization.apibeaconmap,
+          connectorAnchors: _connectorAnchors,
+        ));
 
     // Flatten grouped scan data into individual timestamped readings.
     final readings = <BleReading>[];
@@ -987,6 +1172,13 @@ class LocalizationEngine {
       }
     });
 
+    // [now] is the instant this batch closed, and it reaches the estimator
+    // through the clock injected at construction rather than as an argument:
+    // the estimator takes its time from a single `_clock()` read per update,
+    // so setting [_simClock] before this call is what makes window eviction
+    // and the silence timers advance with the recording instead of with
+    // however long the phone took to get here. Live, that clock is the real
+    // one and [now] is null. It is still used below to stamp the fix.
     final pos = activeEstimator.update(readings, walking: _isWalking);
     if (pos == null) return null;
 
@@ -1006,7 +1198,7 @@ class LocalizationEngine {
         rssi: pos.rank1Rssi.toDouble(),
         bestFloor: pos.floor,
         pendingFloor: pos.pendingFloor,
-        timeStamp: DateTime.now());
+        timeStamp: now ?? DateTime.now());
   }
 
   Map<String, List<MapEntry<DateTime, int>>> groupByDevice(
