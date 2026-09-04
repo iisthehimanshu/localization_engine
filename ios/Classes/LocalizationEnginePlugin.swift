@@ -68,8 +68,6 @@ public final class LocalizationEnginePlugin: NSObject,
 
     private static let sessionDefaultsKey =
         "localization_engine.ios_background_session"
-    private static let restorationIdentifier =
-        "com.iwayplus.localization_engine.central"
 
     private var methodChannel: FlutterMethodChannel?
     private var eventChannel: FlutterEventChannel?
@@ -113,9 +111,7 @@ public final class LocalizationEnginePlugin: NSObject,
             delegate: instance,
             queue: .main,
             options: [
-                CBCentralManagerOptionRestoreIdentifierKey:
-                    restorationIdentifier,
-                CBCentralManagerOptionShowPowerAlertKey: true,
+                CBCentralManagerOptionShowPowerAlertKey: true
             ]
         )
         instance.restorePersistedSession()
@@ -302,21 +298,6 @@ public final class LocalizationEnginePlugin: NSObject,
         } else if central.state == .poweredOff {
             central.stopScan()
         }
-    }
-
-    public func centralManager(
-        _ central: CBCentralManager,
-        willRestoreState dict: [String: Any]
-    ) {
-        guard
-            let configuration = sessionConfiguration,
-            configuration.bleActive,
-            configuration.mode.usesBle,
-            !stopIfDeadlineExpired()
-        else { return }
-
-        isScanning = true
-        startBleScanIfReady()
     }
 
     public func centralManager(
