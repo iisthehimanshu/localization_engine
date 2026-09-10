@@ -26,6 +26,14 @@ abstract class ScanSource {
   /// here" is not something a timeout can tell them.
   bool get providesBle;
 
+  /// Whether this source relays a compass heading.
+  ///
+  /// True only for the host bridge, where the app's native compass is
+  /// forwarded in. A plain browser reports false: `DeviceOrientation` needs a
+  /// gesture-initiated permission prompt that belongs to the page, not to the
+  /// engine, so the caller sources heading itself there.
+  bool get providesHeading;
+
   /// Ask for permissions and adapter power-on.
   ///
   /// Returns rather than throws: refusing to scan is a normal outcome the

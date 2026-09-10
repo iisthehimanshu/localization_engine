@@ -30,6 +30,9 @@ class BrowserGeolocationScanSource implements ScanSource {
   bool get providesBle => false;
 
   @override
+  bool get providesHeading => false;
+
+  @override
   Future<AdapterReadiness> prepare({
     required bool ble,
     required bool gps,

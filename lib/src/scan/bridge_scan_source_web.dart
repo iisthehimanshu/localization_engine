@@ -64,6 +64,9 @@ class BridgeScanSource implements ScanSource {
   @override
   bool get providesBle => true;
 
+  @override
+  bool get providesHeading => true;
+
   /// True when the page is running inside a host app that provides scanning.
   ///
   /// False in a plain browser — opened from a QR code or a desktop — where the

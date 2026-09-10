@@ -273,6 +273,22 @@ class LocalizationEngine {
   Future<bool> get scanSourceProvidesBle async =>
       (await _requireScanSource()).providesBle;
 
+  /// Whether the active scan source relays a compass heading.
+  ///
+  /// False in a plain browser, where the page must source heading itself.
+  Future<bool> get scanSourceProvidesHeading async =>
+      (await _requireScanSource()).providesHeading;
+
+  /// Compass heading in degrees clockwise from north, as relayed by the host.
+  ///
+  /// Resolves the scan source on subscription, so callers can hold this before
+  /// scanning has started. Empty on sources that do not provide heading —
+  /// check [scanSourceProvidesHeading] rather than waiting on it.
+  Stream<double> get headings async* {
+    final source = await _requireScanSource();
+    yield* source.headings;
+  }
+
   /// In-flight resolution, so concurrent callers share one source.
   ///
   /// Resolving is asynchronous (the web bridge waits for its ready event), and
