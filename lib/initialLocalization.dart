@@ -1,4 +1,7 @@
+import 'dart:async';
 import 'dart:collection';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:localization_engine/src/network/api/localizationUsingMLModelapi.dart';
 import 'Point.dart';
@@ -13,7 +16,15 @@ class InitialLocalization{
 
   HashMap<String, Beacon> get apibeaconmap => _apibeaconmap;
 
-  InitialLocalization(this._venueName);
+  /// [headingProvider] supplies the device heading in degrees.
+  ///
+  /// Defaults to `flutter_compass`, which has no web implementation — so a
+  /// bundle running inside the host app's WebView passes a provider backed by
+  /// the scan source's heading stream instead.
+  InitialLocalization(this._venueName, {Future<double?> Function()? headingProvider})
+      : _headingProvider = headingProvider;
+
+  final Future<double?> Function()? _headingProvider;
 
   Future<Pt?> findLocation(Map<String, List<MapEntry<DateTime, int>>> beaconData) async {
     double? compassDirection = await _getCurrentCompassHeading();
@@ -49,8 +60,24 @@ class InitialLocalization{
   }
 
   Future<double?> _getCurrentCompassHeading() async {
-    final compassEvent = await FlutterCompass.events!.first;
-    return compassEvent.heading; // in degrees, 0-360
+    final provided = await _headingProvider?.call();
+    if (provided != null) return provided;
+
+    // Falls back to the sensor plugin on native hosts. Both guards matter:
+    // `events` is null wherever the plugin has no implementation, and the
+    // stream can simply never emit on a device with no usable magnetometer —
+    // which used to hang findLocation forever rather than localise without a
+    // heading.
+    final events = FlutterCompass.events;
+    if (events == null) return null;
+    try {
+      final compassEvent =
+          await events.first.timeout(const Duration(seconds: 2));
+      return compassEvent.heading; // in degrees, 0-360
+    } on TimeoutException {
+      debugPrint('No compass heading available within 2s; localising without one.');
+      return null;
+    }
   }
 
   Future<dynamic> localizeUsingMLModel(Map<String, double> values) async {

@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math';
 
 import 'package:adapter_manager/adapter_manager.dart';
@@ -15,6 +14,8 @@ import 'package:localization_engine/src/localization_mode.dart';
 import 'package:localization_engine/src/network/api/UserTrackingWebSocket.dart';
 import 'package:localization_engine/src/network/api/beaconapi.dart';
 import 'package:localization_engine/src/network/model/beaconData.dart';
+import 'package:localization_engine/src/scan/scan_source.dart';
+import 'package:localization_engine/src/scan/scan_source_locator.dart';
 import 'package:localization_engine/src/surrounding_device_rssi_aggregator.dart';
 
 import 'initialLocalization.dart';
@@ -27,6 +28,12 @@ export 'package:adapter_manager/adapter_manager.dart';
 /// so consumers can render or diagnose the configured beacons directly.
 export 'src/network/model/beaconData.dart';
 export 'src/localization_mode.dart';
+
+/// The scan-source port and its resolver are part of the package's contract:
+/// a host embedding this engine needs to know where readings come from, and
+/// tooling needs to be able to drive a source directly.
+export 'src/scan/scan_source.dart';
+export 'src/scan/scan_source_locator.dart';
 export 'src/background/localization_background_service.dart';
 export 'src/background/localization_service_configuration.dart';
 
@@ -63,9 +70,14 @@ class _AdapterSetupResult {
 }
 
 class LocalizationEngine {
-  final MethodChannel _methodChannel = MethodChannel('localization_engine');
-  final EventChannel _bleEventChannel = EventChannel('ble_scan_stream');
-  final EventChannel _gpsEventChannel = EventChannel('gps_scan_stream');
+  /// Where raw BLE / GPS / heading data comes from.
+  ///
+  /// Resolved on first scan rather than in the constructor, because on web the
+  /// bridge may not have been injected into the page yet — see
+  /// [resolveScanSource]. Native hosts get the platform channels this engine
+  /// has always used; a web bundle inside the host app's WebView gets the
+  /// JavaScript bridge instead.
+  ScanSource? _scanSource;
 
   InitialLocalization? _localization;
   late String _venueName;
@@ -239,18 +251,13 @@ class LocalizationEngine {
     if (_skipAdapterSetup) return const _AdapterSetupResult.success();
 
     try {
-      final locationPermissionResult = await _setupLocationPermission();
-      if (!locationPermissionResult.success) return locationPermissionResult;
-
-      if (_usesGps) {
-        final gpsResult = await _setupGpsAdapter();
-        if (!gpsResult.success) return gpsResult;
-      }
-      if (_usesBle) {
-        final bleResult = await _setupBleAdapter();
-        if (!bleResult.success) return bleResult;
-      }
-      return const _AdapterSetupResult.success();
+      final source = await _requireScanSource();
+      final readiness = await source.prepare(ble: _usesBle, gps: _usesGps);
+      if (readiness.isReady) return const _AdapterSetupResult.success();
+      return _AdapterSetupResult.failure(
+        readiness.message ?? 'Adapters are not ready.',
+        permissionDenied: readiness.permissionDenied,
+      );
     } catch (error) {
       return _AdapterSetupResult.failure(
         'Unexpected error while setting up adapters: $error',
@@ -258,51 +265,54 @@ class LocalizationEngine {
     }
   }
 
-  Future<_AdapterSetupResult> _setupLocationPermission() async {
-    final permission = await AdapterManager.requestLocationPermission();
-    if (!permission.isGranted) {
-      return _AdapterSetupResult.failure(
-        permission.isPermanentlyDenied
-            ? 'Location permission permanently denied. Please enable it in settings.'
-            : 'Location permission denied.',
-        permissionDenied: true,
-      );
+  /// Whether the active scan source can deliver BLE.
+  ///
+  /// False in a plain browser, where positioning is GPS-only. Callers that
+  /// render an indoor position should check this rather than assume beacons
+  /// will eventually show up.
+  Future<bool> get scanSourceProvidesBle async =>
+      (await _requireScanSource()).providesBle;
+
+  /// In-flight resolution, so concurrent callers share one source.
+  ///
+  /// Resolving is asynchronous (the web bridge waits for its ready event), and
+  /// two callers arriving during that gap would each build their own source.
+  /// For the bridge that is actively harmful: constructing one assigns the
+  /// page's single `onEvent` handler, so the second silently unhooks the first
+  /// and the engine ends up holding a source that will never emit.
+  Future<ScanSource>? _scanSourcePending;
+
+  /// Resolves the scan source once and reuses it for the engine's lifetime.
+  Future<ScanSource> _requireScanSource() {
+    final existing = _scanSource;
+    if (existing != null) return Future.value(existing);
+    return _scanSourcePending ??= _resolveScanSourceOnce();
+  }
+
+  Future<ScanSource> _resolveScanSourceOnce() async {
+    final resolved = await resolveScanSource();
+    // A dispose racing the resolve must not leave a live scanner behind.
+    if (_isDisposed) {
+      await resolved.dispose();
+      _scanSourcePending = null;
+      return resolved;
     }
-    return const _AdapterSetupResult.success();
+    debugPrint('LocalizationEngine scanning via ${resolved.description}');
+    return _scanSource = resolved;
   }
 
-  Future<_AdapterSetupResult> _setupGpsAdapter() async {
-    final enabled = await AdapterManager.isGpsEnabled() ||
-        await AdapterManager.promptEnableGps();
-    return enabled
-        ? const _AdapterSetupResult.success()
-        : const _AdapterSetupResult.failure(
-            'GPS not enabled. Please enable location services.',
-          );
-  }
-
-  Future<_AdapterSetupResult> _setupBleAdapter() async {
-    final permission = await AdapterManager.requestBluetoothPermission();
-    if (!permission.isGranted) {
-      return _AdapterSetupResult.failure(
-        permission.isPermanentlyDenied
-            ? 'Bluetooth permission permanently denied. Please enable it in settings.'
-            : 'Bluetooth permission denied.',
-        permissionDenied: true,
-      );
-    }
-
-    final enabled = await AdapterManager.isBluetoothEnabled() ||
-        await AdapterManager.promptEnableBluetooth();
-    return enabled
-        ? const _AdapterSetupResult.success()
-        : const _AdapterSetupResult.failure(
-            'Bluetooth not enabled. Please enable Bluetooth.',
-          );
-  }
+  /// Latest heading reported by the scan source, if it provides one.
+  ///
+  /// Native hosts leave this null and the compass plugin is used instead; the
+  /// bridge supplies it, because there is no compass plugin in a WebView.
+  double? _latestHeading;
+  StreamSubscription<double>? _headingSubscription;
 
   Future<void> _initializeBleVenue() async {
-    _localization = InitialLocalization(_venueName);
+    _localization = InitialLocalization(
+      _venueName,
+      headingProvider: () async => _latestHeading,
+    );
     await _localization!.parseBeaconMap(_venueName);
   }
 
@@ -328,24 +338,21 @@ class LocalizationEngine {
         await _initializeBleVenue();
         if (_isDisposed) return;
       }
+      final source = await _requireScanSource();
+      _headingSubscription ??=
+          source.headings.listen((heading) => _latestHeading = heading);
       if (_usesGps) {
-        await _methodChannel.invokeMethod(
-          'startGpsScan',
-          _nativeSessionConfiguration,
-        );
+        await source.startGps(_scanSessionConfiguration);
         if (_isDisposed) {
-          await _methodChannel.invokeMethod<void>('stopGpsScan');
+          await source.stopGps();
           return;
         }
         initGpsStream();
       }
       if (_usesBle) {
-        await _methodChannel.invokeMethod(
-          'startScan',
-          _nativeSessionConfiguration,
-        );
+        await source.startBle(_scanSessionConfiguration);
         if (_isDisposed) {
-          await _methodChannel.invokeMethod<void>('stopScan');
+          await source.stopBle();
           return;
         }
         initBleStream();
@@ -364,21 +371,22 @@ class LocalizationEngine {
     }
   }
 
-  Map<String, Object?> get _nativeSessionConfiguration => <String, Object?>{
-        'venueName': _venueName,
-        'baseUrl': _baseURL,
-        'mode': localizationMode.name,
-        'stopAt': stopAt?.millisecondsSinceEpoch,
-      };
+  ScanSessionConfig get _scanSessionConfiguration => ScanSessionConfig(
+        venueName: _venueName,
+        baseUrl: _baseURL ?? '',
+        mode: localizationMode.name,
+        stopAt: stopAt,
+      );
 
   Future<void> _stopScanning() async {
+    final source = _scanSource;
     if (_usesBle) {
-      await _methodChannel.invokeMethod('stopScan');
+      await source?.stopBle();
       await _stopEstimatorLocationStream();
       _stopSurroundingDeviceStream();
     }
     if (_usesGps) {
-      await _methodChannel.invokeMethod('stopGpsScan');
+      await source?.stopGps();
     }
     await _bleSubscription?.cancel();
     _bleSubscription = null;
@@ -413,8 +421,15 @@ class LocalizationEngine {
     await _stopEstimatorLocationStream();
     _stopSurroundingDeviceStream();
 
-    await _safeStopNativeScanner('stopScan');
-    await _safeStopNativeScanner('stopGpsScan');
+    // Tolerates a detached native engine and a torn-down WebView alike; the
+    // source knows which failures its own transport can produce.
+    await _headingSubscription?.cancel();
+    _headingSubscription = null;
+
+    final source = _scanSource;
+    _scanSource = null;
+    _scanSourcePending = null;
+    await source?.dispose();
 
     await _locationLoopTask;
     _locationLoopTask = null;
@@ -426,16 +441,6 @@ class LocalizationEngine {
     await _userLocation.close();
     await _estimatorLocationController.close();
     await _surroundingDeviceController.close();
-  }
-
-  Future<void> _safeStopNativeScanner(String method) async {
-    try {
-      await _methodChannel.invokeMethod<void>(method);
-    } on MissingPluginException {
-      // The native engine may already have detached during shutdown.
-    } on PlatformException catch (error) {
-      debugPrint('Failed to invoke $method during disposal: $error');
-    }
   }
 
   final _bleController = StreamController<Map<String, dynamic>?>.broadcast();
@@ -450,15 +455,14 @@ class LocalizationEngine {
   StreamSubscription? _bleSubscription;
 
   void initBleStream() {
-    _bleSubscription ??=
-        _bleEventChannel.receiveBroadcastStream().listen((event) {
+    final source = _scanSource;
+    if (source == null) return;
+    _bleSubscription ??= source.bleBatches.listen((batch) {
       try {
         // Simulation owns the stream while it runs: a replayed walk must not
         // be corrected by beacons the phone can actually hear right now.
         if (_isSimulating) return;
-        final List<dynamic> rawList = event as List;
-        for (var entry in rawList) {
-          final map = Map<String, dynamic>.from(entry);
+        for (final map in batch) {
           final name = map['name'];
           if (name is! String || !name.toLowerCase().startsWith('iw')) {
             _surroundingDeviceAggregator.add(map);
@@ -966,10 +970,10 @@ class LocalizationEngine {
   StreamSubscription? _gpsSubscription;
 
   void initGpsStream() {
-    _gpsSubscription ??=
-        _gpsEventChannel.receiveBroadcastStream().listen((event) {
+    final source = _scanSource;
+    if (source == null) return;
+    _gpsSubscription ??= source.gpsFixes.listen((map) {
       try {
-        final map = Map<String, dynamic>.from(event as Map);
         _gpsController.add(map);
       } catch (e) {
         print('gpsStreamRaw error: $e');
@@ -1240,19 +1244,19 @@ class LocalizationEngine {
       if (kIsWeb) {
         final webInfo = await deviceInfo.webBrowserInfo;
         id = 'web_${webInfo.userAgent.hashCode}';
-      } else if (Platform.isAndroid) {
+      } else if (defaultTargetPlatform == TargetPlatform.android) {
         final androidInfo = await deviceInfo.androidInfo;
         id = androidInfo.id;
-      } else if (Platform.isIOS) {
+      } else if (defaultTargetPlatform == TargetPlatform.iOS) {
         final iosInfo = await deviceInfo.iosInfo;
         id = iosInfo.identifierForVendor;
-      } else if (Platform.isMacOS) {
+      } else if (defaultTargetPlatform == TargetPlatform.macOS) {
         final macInfo = await deviceInfo.macOsInfo;
         id = macInfo.systemGUID;
-      } else if (Platform.isWindows) {
+      } else if (defaultTargetPlatform == TargetPlatform.windows) {
         final windowsInfo = await deviceInfo.windowsInfo;
         id = windowsInfo.deviceId;
-      } else if (Platform.isLinux) {
+      } else if (defaultTargetPlatform == TargetPlatform.linux) {
         final linuxInfo = await deviceInfo.linuxInfo;
         id = linuxInfo.machineId;
       }
