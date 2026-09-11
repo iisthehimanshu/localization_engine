@@ -223,7 +223,7 @@ class LocalizationEngine {
   /// Cleanly tears down the current run and re-initializes for [venueName].
   ///
   /// Cancels in-flight loops and subscriptions, resets internal state, clears
-  /// the GPS buffer, and reconnects the WebSocket. Call this after the user
+  /// the GPS buffer, and ensures the WebSocket is connected. Call this after the user
   /// grants previously denied permissions or to switch venues.
   Future<void> restart({required String venueName}) async {
     if (_isDisposed) {
@@ -240,7 +240,7 @@ class LocalizationEngine {
     _positionEstimator = null;
     _gpsBuffer.clear();
 
-    // Reconnect WebSocket
+    // Ensure the WebSocket is connected (no-op if it already is)
     wsService.connect();
 
     // Reinitialize
