@@ -32,6 +32,10 @@ class BrowserGeolocationScanSource implements ScanSource {
   @override
   bool get providesHeading => false;
 
+  /// A plain browser's page reads `devicemotion` itself.
+  @override
+  bool get providesAccelerometer => false;
+
   @override
   Future<AdapterReadiness> prepare({
     required bool ble,
@@ -109,6 +113,16 @@ class BrowserGeolocationScanSource implements ScanSource {
   /// where there is no compass worth trusting anyway.
   @override
   Stream<double> get headings => const Stream<double>.empty();
+
+  @override
+  Future<void> startAccelerometer() async {}
+
+  @override
+  Future<void> stopAccelerometer() async {}
+
+  @override
+  Stream<AccelerometerSample> get accelerometer =>
+      const Stream<AccelerometerSample>.empty();
 
   @override
   Stream<AdapterReadiness> get adapterChanges => _adapterChanges.stream;

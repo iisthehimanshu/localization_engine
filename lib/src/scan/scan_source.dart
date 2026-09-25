@@ -34,6 +34,13 @@ abstract class ScanSource {
   /// engine, so the caller sources heading itself there.
   bool get providesHeading;
 
+  /// Whether this source relays the device accelerometer.
+  ///
+  /// True only for a host bridge new enough to have the stream. Everywhere
+  /// else the caller reads the accelerometer itself — natively through its
+  /// sensor plugin, and in a plain browser through `devicemotion`.
+  bool get providesAccelerometer;
+
   /// Ask for permissions and adapter power-on.
   ///
   /// Returns rather than throws: refusing to scan is a normal outcome the
@@ -45,6 +52,11 @@ abstract class ScanSource {
 
   Future<void> startGps(ScanSessionConfig config);
   Future<void> stopGps();
+
+  /// Independent of BLE and GPS: the accelerometer is wanted only while
+  /// dead reckoning runs, which is a much narrower window than scanning.
+  Future<void> startAccelerometer();
+  Future<void> stopAccelerometer();
 
   /// Batches of BLE advertisements.
   ///
@@ -68,10 +80,28 @@ abstract class ScanSource {
   /// implementation — the reason heading belongs on this interface at all.
   Stream<double> get headings;
 
+  /// Accelerometer samples, oldest first. Empty unless
+  /// [providesAccelerometer] and [startAccelerometer] has been called.
+  Stream<AccelerometerSample> get accelerometer;
+
   /// Adapter/permission state changes observed after [prepare].
   Stream<AdapterReadiness> get adapterChanges;
 
   Future<void> dispose();
+}
+
+/// One accelerometer sample, gravity included, in Android's convention: m/s²,
+/// and ~+9.8 on the axis pointing up while the device is at rest. The host
+/// converts iOS readings to match.
+class AccelerometerSample {
+  const AccelerometerSample(this.x, this.y, this.z, this.timestamp);
+
+  final double x;
+  final double y;
+  final double z;
+
+  /// When the sample was measured, not when its batch arrived.
+  final DateTime timestamp;
 }
 
 /// Result of asking for permissions and adapter power.
@@ -110,6 +140,8 @@ class ScanSessionConfig {
     this.restartInterval = const Duration(minutes: 1),
     this.gpsInterval = const Duration(seconds: 1),
     this.headingFilterDegrees = 1,
+    this.accelInterval = const Duration(milliseconds: 40),
+    this.accelFlushInterval = const Duration(milliseconds: 100),
   });
 
   final String venueName;
@@ -137,6 +169,13 @@ class ScanSessionConfig {
   /// than positioning needs, and on the bridge every update is a crossing.
   final double headingFilterDegrees;
 
+  /// Accelerometer sampling period. 25Hz is ample for step detection, and
+  /// well below the ~60Hz `devicemotion` forces on three sensors at once.
+  final Duration accelInterval;
+
+  /// How long the host batches accelerometer samples before relaying them.
+  final Duration accelFlushInterval;
+
   /// Shape the native platform channels expect. Unchanged from what the
   /// engine sent before this interface existed.
   Map<String, Object?> toPlatformChannelArguments() => <String, Object?>{
@@ -155,6 +194,8 @@ class ScanSessionConfig {
         'restartIntervalMs': restartInterval.inMilliseconds,
         'gpsIntervalMs': gpsInterval.inMilliseconds,
         'headingFilterDeg': headingFilterDegrees,
+        'accelIntervalMs': accelInterval.inMilliseconds,
+        'accelFlushIntervalMs': accelFlushInterval.inMilliseconds,
       };
 }
 

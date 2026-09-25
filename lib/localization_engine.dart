@@ -289,6 +289,45 @@ class LocalizationEngine {
     yield* source.headings;
   }
 
+  /// Whether the active scan source relays the device accelerometer.
+  ///
+  /// True only inside a host app whose scanner has the stream. Elsewhere the
+  /// caller reads the accelerometer itself.
+  Future<bool> get scanSourceProvidesAccelerometer async =>
+      (await _requireScanSource()).providesAccelerometer;
+
+  /// Accelerometer samples relayed by the host, gravity included.
+  ///
+  /// The host's sensor runs only while this stream has a listener: it starts
+  /// on listen and stops on cancel, so a caller that listens only while dead
+  /// reckoning runs keeps the sensor off the rest of the time. Empty on
+  /// sources that do not provide it — check [scanSourceProvidesAccelerometer]
+  /// rather than waiting on it.
+  Stream<AccelerometerSample> get accelerometer {
+    late final StreamController<AccelerometerSample> controller;
+    StreamSubscription<AccelerometerSample>? subscription;
+    ScanSource? started;
+    var cancelled = false;
+
+    controller = StreamController<AccelerometerSample>(
+      onListen: () async {
+        final source = await _requireScanSource();
+        // Cancelled while the source was still resolving: never start it.
+        if (cancelled) return;
+        subscription = source.accelerometer
+            .listen(controller.add, onError: controller.addError);
+        started = source;
+        await source.startAccelerometer();
+      },
+      onCancel: () async {
+        cancelled = true;
+        await subscription?.cancel();
+        await started?.stopAccelerometer();
+      },
+    );
+    return controller.stream;
+  }
+
   /// In-flight resolution, so concurrent callers share one source.
   ///
   /// Resolving is asynchronous (the web bridge waits for its ready event), and

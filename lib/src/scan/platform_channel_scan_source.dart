@@ -42,6 +42,10 @@ class PlatformChannelScanSource implements ScanSource {
   @override
   bool get providesHeading => false;
 
+  /// A native host reads the accelerometer through its own sensor plugin.
+  @override
+  bool get providesAccelerometer => false;
+
   @override
   Future<AdapterReadiness> prepare({
     required bool ble,
@@ -140,6 +144,16 @@ class PlatformChannelScanSource implements ScanSource {
   /// channel for no gain — the bridge path is the one that needed it.
   @override
   Stream<double> get headings => const Stream<double>.empty();
+
+  @override
+  Future<void> startAccelerometer() async {}
+
+  @override
+  Future<void> stopAccelerometer() async {}
+
+  @override
+  Stream<AccelerometerSample> get accelerometer =>
+      const Stream<AccelerometerSample>.empty();
 
   @override
   Stream<AdapterReadiness> get adapterChanges => _adapterChanges.stream;

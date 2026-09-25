@@ -21,6 +21,9 @@ external _Bridge? get _globalBridge;
 extension type _Bridge._(JSObject _) implements JSObject {
   external bool get available;
   external int get protocolVersion;
+
+  /// Absent on hosts built before it existed, which also predate `accel`.
+  external JSArray<JSString>? get streams;
   external set onEvent(JSFunction value);
   external void ready();
   external void configure(JSAny? config);
@@ -44,6 +47,7 @@ class BridgeScanSource implements ScanSource {
   final _bleBatches = StreamController<List<Map<String, dynamic>>>.broadcast();
   final _gpsFixes = StreamController<Map<String, dynamic>>.broadcast();
   final _headings = StreamController<double>.broadcast();
+  final _accelerometer = StreamController<AccelerometerSample>.broadcast();
   final _adapterChanges = StreamController<AdapterReadiness>.broadcast();
 
   Completer<AdapterReadiness>? _pendingState;
@@ -66,6 +70,13 @@ class BridgeScanSource implements ScanSource {
 
   @override
   bool get providesHeading => true;
+
+  /// Read from the bootstrap rather than assumed: the host app ships on its
+  /// own release cycle, and one built before this stream existed would take
+  /// a `start(['accel'])` and never send anything back.
+  @override
+  late final bool providesAccelerometer =
+      _bridge.streams?.toDart.any((s) => s.toDart == 'accel') ?? false;
 
   /// True when the page is running inside a host app that provides scanning.
   ///
@@ -146,6 +157,8 @@ class BridgeScanSource implements ScanSource {
       case 'heading':
         final heading = (payload['heading'] as num?)?.toDouble();
         if (heading != null) _headings.add(heading);
+      case 'accel':
+        _emitAccelerometer(payload);
       case 'adapter':
         _emitAdapterState(payload);
       case 'error':
@@ -180,6 +193,23 @@ class BridgeScanSource implements ScanSource {
     final dropped = (payload['dropped'] as num?)?.toInt() ?? 0;
     if (dropped > 0) {
       debugPrint('Iwayplus scanner dropped $dropped readings this window');
+    }
+  }
+
+  /// Each sample arrives as `[x, y, z, epochMs]`.
+  void _emitAccelerometer(Map<String, dynamic> payload) {
+    final samples = payload['samples'];
+    if (samples is! List) return;
+    for (final sample in samples) {
+      if (sample is! List || sample.length < 4) continue;
+      final [x, y, z, t, ...] = sample;
+      if (x is! num || y is! num || z is! num || t is! num) continue;
+      _accelerometer.add(AccelerometerSample(
+        x.toDouble(),
+        y.toDouble(),
+        z.toDouble(),
+        DateTime.fromMillisecondsSinceEpoch(t.toInt()),
+      ));
     }
   }
 
@@ -260,6 +290,18 @@ class BridgeScanSource implements ScanSource {
       _bridge.stop(<JSString>['gps'.toJS, 'heading'.toJS].toJS);
 
   @override
+  Future<void> startAccelerometer() async {
+    if (!providesAccelerometer) return;
+    _bridge.start(<JSString>['accel'.toJS].toJS);
+  }
+
+  @override
+  Future<void> stopAccelerometer() async {
+    if (!providesAccelerometer) return;
+    _bridge.stop(<JSString>['accel'.toJS].toJS);
+  }
+
+  @override
   Stream<List<Map<String, dynamic>>> get bleBatches => _bleBatches.stream;
 
   @override
@@ -267,6 +309,9 @@ class BridgeScanSource implements ScanSource {
 
   @override
   Stream<double> get headings => _headings.stream;
+
+  @override
+  Stream<AccelerometerSample> get accelerometer => _accelerometer.stream;
 
   @override
   Stream<AdapterReadiness> get adapterChanges => _adapterChanges.stream;
@@ -277,6 +322,7 @@ class BridgeScanSource implements ScanSource {
     await _bleBatches.close();
     await _gpsFixes.close();
     await _headings.close();
+    await _accelerometer.close();
     await _adapterChanges.close();
   }
 }
