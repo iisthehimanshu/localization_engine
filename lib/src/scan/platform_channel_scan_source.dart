@@ -47,6 +47,9 @@ class PlatformChannelScanSource implements ScanSource {
   bool get providesAccelerometer => false;
 
   @override
+  Future<bool> openSettings() async => false;
+
+  @override
   Future<AdapterReadiness> prepare({
     required bool ble,
     required bool gps,

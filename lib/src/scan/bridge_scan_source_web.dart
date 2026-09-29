@@ -31,6 +31,12 @@ extension type _Bridge._(JSObject _) implements JSObject {
   external void stop(JSArray<JSString> streams);
   external void stopAll();
   external void getState();
+
+  /// Absent on hosts built before it existed. Returns false when the page is
+  /// not inside a React Native WebView and the command went nowhere.
+  external JSFunction? get openSettings;
+  @JS('openSettings')
+  external bool callOpenSettings();
 }
 
 /// [ScanSource] backed by the React Native host app's scanner.
@@ -266,6 +272,19 @@ class BridgeScanSource implements ScanSource {
         'The host app did not report scanner state.',
       ),
     );
+  }
+
+  /// Asks the host app to open its own settings page.
+  ///
+  /// Nothing else can: the page runs inside the host's WebView, so the
+  /// permissions it lacks are the host app's, and a settings plugin in this
+  /// bundle has no web implementation to open them with. A host built before
+  /// the command existed answers false, so the caller can say what to do
+  /// instead of offering a button that does nothing.
+  @override
+  Future<bool> openSettings() async {
+    if (_bridge.openSettings == null) return false;
+    return _bridge.callOpenSettings();
   }
 
   @override

@@ -47,6 +47,17 @@ abstract class ScanSource {
   /// engine reports to the app, not an exceptional one.
   Future<AdapterReadiness> prepare({required bool ble, required bool gps});
 
+  /// Open the settings screen where the user can grant what [prepare] found
+  /// denied.
+  ///
+  /// True when this source handed the request to something that can open it.
+  /// False when it cannot, and the caller should fall back to its own means:
+  /// a native Flutter host has a settings plugin, and a plain browser has no
+  /// settings to open at all. Only the bridge answers true, because inside a
+  /// WebView the permissions belong to the host app, and only it can open its
+  /// own settings page.
+  Future<bool> openSettings();
+
   Future<void> startBle(ScanSessionConfig config);
   Future<void> stopBle();
 

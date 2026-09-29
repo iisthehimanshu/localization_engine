@@ -296,6 +296,15 @@ class LocalizationEngine {
   Future<bool> get scanSourceProvidesAccelerometer async =>
       (await _requireScanSource()).providesAccelerometer;
 
+  /// Opens the settings page where the user can grant the permissions a
+  /// [PermissionException] reported missing.
+  ///
+  /// True when the active scan source opened it — inside a host app, which
+  /// owns the permissions. False everywhere else; a native Flutter host opens
+  /// its own settings with a plugin instead.
+  Future<bool> openScanSourceSettings() async =>
+      (await _requireScanSource()).openSettings();
+
   /// Accelerometer samples relayed by the host, gravity included.
   ///
   /// The host's sensor runs only while this stream has a listener: it starts
