@@ -52,7 +52,15 @@ class BridgeScanSource implements ScanSource {
 
   final _bleBatches = StreamController<List<Map<String, dynamic>>>.broadcast();
   final _gpsFixes = StreamController<Map<String, dynamic>>.broadcast();
-  final _headings = StreamController<double>.broadcast();
+  /// The host's compass runs for as long as something is listening here, not
+  /// only while a scan session is up. A user placed by a scanned QR or a
+  /// picked landmark has a position without any scan — Bluetooth may be off,
+  /// so the session never started — and the map's puck still has to turn with
+  /// the phone. Tied to GPS alone, the heading never started on that path.
+  late final _headings = StreamController<double>.broadcast(
+    onListen: () => _bridge.start(<JSString>['heading'.toJS].toJS),
+    onCancel: () => _bridge.stop(<JSString>['heading'.toJS].toJS),
+  );
   final _accelerometer = StreamController<AccelerometerSample>.broadcast();
   final _adapterChanges = StreamController<AdapterReadiness>.broadcast();
 
@@ -299,14 +307,13 @@ class BridgeScanSource implements ScanSource {
   @override
   Future<void> startGps(ScanSessionConfig config) async {
     _bridge.configure(config.toBridgeConfiguration().jsify());
-    // Heading rides along with GPS: both answer "where is the user facing and
-    // standing", and no caller has ever wanted one without the other.
-    _bridge.start(<JSString>['gps'.toJS, 'heading'.toJS].toJS);
+    // Heading is not started here: it follows its listeners (see [_headings]),
+    // so stopping or failing a scan cannot freeze a puck that is on screen.
+    _bridge.start(<JSString>['gps'.toJS].toJS);
   }
 
   @override
-  Future<void> stopGps() async =>
-      _bridge.stop(<JSString>['gps'.toJS, 'heading'.toJS].toJS);
+  Future<void> stopGps() async => _bridge.stop(<JSString>['gps'.toJS].toJS);
 
   @override
   Future<void> startAccelerometer() async {
