@@ -246,7 +246,7 @@ class BLEPositionEstimator {
     //                3.0 -> +1.1s/25 (worst 5.3px)   1.5 -> +0.1s/102 (worst 20px)
     //   mean-based:  2.5 -> +0.7s/41 (worst 4.6px) — less lag AND a smaller
     //                worst-case backward jump than the original 6.0/peak.
-    this.windowS = 2.5,
+    this.windowS = 4.0,
     this.temp    = 3.0,
     this.topN    = 3,
     this.floor,
