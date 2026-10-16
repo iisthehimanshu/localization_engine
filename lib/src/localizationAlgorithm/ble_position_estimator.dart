@@ -152,7 +152,7 @@ class BLEPositionEstimator {
   static const double _alphaStationary  = 0.5;  // EMA α stationary
   static const double _alphaWalking     = 0.7;  // EMA α walking
   static const double _maxJumpStat      = 16.0;   // max px/update stationary ~4m
-  static const double _maxJumpWalk      = 24.0;  // max px/update walking    ~6m
+  static const double _maxJumpWalk      = 16.0;  // max px/update walking    ~4m
   static const int    _rssiMin          = -110;
   static const int    _rssiMax          = -55;
   // Trust band a beacon's aggregated RSSI must sit inside to be positioned on.
