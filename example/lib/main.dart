@@ -1,325 +1,449 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:csv/csv.dart';
 import 'package:flutter/material.dart';
 import 'package:localization_engine/localization_engine.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:wifi_scan/wifi_scan.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const LocalizationHostApp());
+  runApp(const ScanLoggerApp());
 }
 
-class LocalizationHostApp extends StatelessWidget {
-  const LocalizationHostApp({super.key});
+class ScanLoggerApp extends StatelessWidget {
+  const ScanLoggerApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Localization host',
+      title: 'Scan logger',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
       ),
-      home: const LocalizationServicePage(),
+      home: const ScanLoggerPage(),
     );
   }
 }
 
-class LocalizationServicePage extends StatefulWidget {
-  const LocalizationServicePage({super.key});
+class ScanLoggerPage extends StatefulWidget {
+  const ScanLoggerPage({super.key});
 
   @override
-  State<LocalizationServicePage> createState() =>
-      _LocalizationServicePageState();
+  State<ScanLoggerPage> createState() => _ScanLoggerPageState();
 }
 
-class _LocalizationServicePageState extends State<LocalizationServicePage> {
-  final _venueController = TextEditingController(text: 'Iwayplus');
-  final _baseUrlController = TextEditingController(
-    text: 'https://dev.iwayplus.in',
-  );
-  final _durationController = TextEditingController(text: '30');
-  final _surroundingScanIntervalController = TextEditingController(text: '10');
+class _ScanLoggerPageState extends State<ScanLoggerPage> {
+  /// Android allows only a handful of Wi-Fi scans per two minutes (unless
+  /// "Wi-Fi scan throttling" is turned off in developer options), so asking
+  /// every second is as fast as the platform will go: throttled requests fail
+  /// cheaply and the next allowed one is picked up within a second.
+  static const _wifiScanRequestInterval = Duration(seconds: 1);
 
-  LocalizationMode _selectedMode = LocalizationMode.bothGPSandBLE;
-  LocalizationServiceConfiguration? _activeConfiguration;
-  Duration? _remainingDuration;
-  Timer? _refreshTimer;
-  bool _isRunning = false;
-  bool _isBusy = true;
-  String? _error;
+  final _recorder = CsvScanRecorder();
+
+  ScanSource? _source;
+  final _subscriptions = <StreamSubscription<dynamic>>[];
+  Timer? _wifiTimer;
+
+  bool _isScanning = false;
+  bool _isBusy = false;
+  String? _status;
+  String? _savedPath;
 
   @override
   void initState() {
     super.initState();
-    unawaited(_refreshServiceState());
-    _refreshTimer = Timer.periodic(
-      const Duration(seconds: 1),
-      (_) => unawaited(_refreshServiceState(showBusy: false)),
-    );
+    // Offer the previous session's file for sharing after an app restart.
+    unawaited(CsvScanRecorder.latestSavedFile().then((path) {
+      if (mounted && path != null) setState(() => _savedPath ??= path);
+    }));
   }
 
   @override
   void dispose() {
-    _refreshTimer?.cancel();
-    _venueController.dispose();
-    _baseUrlController.dispose();
-    _durationController.dispose();
-    _surroundingScanIntervalController.dispose();
+    unawaited(_stopScanning(save: false));
     super.dispose();
   }
 
-  Future<void> _refreshServiceState({bool showBusy = true}) async {
-    if (showBusy && mounted) setState(() => _isBusy = true);
+  Future<void> _startScanning() async {
+    setState(() {
+      _isBusy = true;
+      _status = null;
+    });
     try {
-      final running = await LocalizationBackgroundService.isRunning;
-      final configuration =
-          await LocalizationBackgroundService.activeConfiguration;
-      final remaining = await LocalizationBackgroundService.remainingDuration;
-      if (!mounted) return;
-      setState(() {
-        _isRunning = running;
-        _activeConfiguration = configuration;
-        _remainingDuration = remaining;
-        if (configuration != null) _selectedMode = configuration.mode;
-        if (configuration != null && running) {
-          _surroundingScanIntervalController.text =
-              configuration.surroundingDeviceScanInterval.inSeconds.toString();
-        }
-        _error = null;
-      });
-    } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
-    } finally {
-      if (showBusy && mounted) setState(() => _isBusy = false);
-    }
-  }
+      // A fresh source per session: the native side ends the BLE stream when
+      // scanning stops, so a previous source's stream cannot be reused.
+      final source = await resolveScanSource();
+      final readiness = await source.prepare(ble: true, gps: true);
+      if (!readiness.isReady) {
+        await source.dispose();
+        throw StateError(readiness.message ?? 'Bluetooth or GPS unavailable.');
+      }
+      _source = source;
 
-  Duration? _readDuration() {
-    final value = _durationController.text.trim();
-    if (value.isEmpty) return null;
-    final minutes = int.tryParse(value);
-    if (minutes == null || minutes <= 0) {
-      throw const FormatException(
-        'Enter positive minutes, or leave duration blank to run indefinitely.',
+      await _recorder.open();
+
+      // Listen before starting so the native stream handlers are attached by
+      // the time the first results arrive.
+      _subscriptions
+        ..add(source.bleBatches.listen(_recorder.addBleBatch,
+            onError: _onStreamError))
+        ..add(source.gpsFixes.listen(_recorder.addGpsFix,
+            onError: _onStreamError));
+
+      const config = ScanSessionConfig(
+        venueName: 'scan-logger',
+        baseUrl: '',
+        mode: 'bothGPSandBLE',
       );
+      await source.startBle(config);
+      await source.startGps(config);
+
+      await _startWifi();
+
+      setState(() => _isScanning = true);
+    } catch (error) {
+      await _stopScanning(save: false);
+      if (mounted) setState(() => _status = error.toString());
+    } finally {
+      if (mounted) setState(() => _isBusy = false);
     }
-    return Duration(minutes: minutes);
   }
 
-  Duration _readSurroundingScanInterval() {
-    if (_selectedMode == LocalizationMode.onlyGps) {
-      return const Duration(seconds: 10);
+  Future<void> _startWifi() async {
+    final can = await WiFiScan.instance.canStartScan(askPermissions: true);
+    if (can != CanStartScan.yes) {
+      // Not fatal: iOS has no Wi-Fi scanning API at all, and BLE + GPS are
+      // still worth recording without it.
+      setState(() => _status = 'Wi-Fi scanning unavailable ($can).');
+      return;
     }
-    final seconds = int.tryParse(
-      _surroundingScanIntervalController.text.trim(),
+    _subscriptions.add(WiFiScan.instance.onScannedResultsAvailable
+        .listen(_recorder.addWifiResults, onError: _onStreamError));
+    unawaited(WiFiScan.instance.startScan());
+    _wifiTimer = Timer.periodic(
+      _wifiScanRequestInterval,
+      (_) => unawaited(WiFiScan.instance.startScan()),
     );
-    if (seconds == null || seconds <= 0) {
-      throw const FormatException(
-        'Enter a positive surrounding-device scan interval in seconds.',
-      );
-    }
-    return Duration(seconds: seconds);
   }
 
-  Future<void> _startService() async {
-    FocusManager.instance.primaryFocus?.unfocus();
+  Future<void> _shareSavedFile() async {
+    final path = _savedPath;
+    if (path == null) return;
+    await SharePlus.instance.share(
+      ShareParams(files: [XFile(path, mimeType: 'text/csv')]),
+    );
+  }
+
+  void _onStreamError(Object error) {
+    if (mounted) setState(() => _status = error.toString());
+  }
+
+  Future<void> _stopScanning({bool save = true}) async {
+    if (save && mounted) setState(() => _isBusy = true);
+
+    _wifiTimer?.cancel();
+    _wifiTimer = null;
+    for (final subscription in _subscriptions) {
+      await subscription.cancel();
+    }
+    _subscriptions.clear();
+
+    final source = _source;
+    _source = null;
+    if (source != null) {
+      await source.stopBle();
+      await source.stopGps();
+      await source.dispose();
+    }
+
+    final path = await _recorder.close();
+
+    if (!mounted) return;
     setState(() {
-      _isBusy = true;
-      _error = null;
+      _isScanning = false;
+      _isBusy = false;
+      if (save) _savedPath = path;
     });
-    try {
-      await LocalizationBackgroundService.start(
-        venueName: _venueController.text,
-        baseUrl: _baseUrlController.text.trim().isEmpty
-            ? null
-            : _baseUrlController.text.trim(),
-        mode: _selectedMode,
-        duration: _readDuration(),
-        surroundingDeviceScanInterval: _readSurroundingScanInterval(),
-      );
-      await _refreshServiceState(showBusy: false);
-    } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
-    } finally {
-      if (mounted) setState(() => _isBusy = false);
-    }
-  }
-
-  Future<void> _stopService() async {
-    setState(() {
-      _isBusy = true;
-      _error = null;
-    });
-    try {
-      await LocalizationBackgroundService.stop();
-      await _refreshServiceState(showBusy: false);
-    } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
-    } finally {
-      if (mounted) setState(() => _isBusy = false);
-    }
-  }
-
-  String get _statusText {
-    if (!_isRunning) return 'Stopped';
-    return 'Running · ${_modeLabel(_activeConfiguration?.mode ?? _selectedMode)}';
-  }
-
-  String? get _deadlineText {
-    if (!_isRunning || _activeConfiguration?.stopAt == null) return null;
-    final remaining = _remainingDuration ?? Duration.zero;
-    final hours = remaining.inHours;
-    final minutes = remaining.inMinutes.remainder(60);
-    final seconds = remaining.inSeconds.remainder(60);
-    return 'Stops in ${hours > 0 ? '${hours}h ' : ''}${minutes}m ${seconds}s';
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('Localization host')),
+      appBar: AppBar(title: const Text('Scan logger')),
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(20),
-          children: [
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(18),
-                child: Row(
-                  children: [
-                    Icon(
-                      _isRunning
-                          ? Icons.location_searching
-                          : Icons.location_off,
-                      color: _isRunning ? Colors.green : Colors.grey,
-                      size: 34,
+        child: ListenableBuilder(
+          listenable: _recorder,
+          builder: (context, _) => ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed:
+                          _isScanning || _isBusy ? null : _startScanning,
+                      icon: const Icon(Icons.play_arrow),
+                      label: const Text('Start scanning'),
                     ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _statusText,
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          if (_activeConfiguration != null)
-                            Text(_activeConfiguration!.venueName),
-                          if (_deadlineText != null) Text(_deadlineText!),
-                        ],
-                      ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton.tonalIcon(
+                      onPressed:
+                          _isScanning && !_isBusy ? _stopScanning : null,
+                      icon: const Icon(Icons.stop),
+                      label: const Text('Stop scanning'),
                     ),
-                    if (_isBusy)
-                      const SizedBox.square(
-                        dimension: 24,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ),
-            const SizedBox(height: 18),
-            TextField(
-              controller: _venueController,
-              enabled: !_isBusy,
-              decoration: const InputDecoration(
-                labelText: 'Venue name',
-                border: OutlineInputBorder(),
+              const SizedBox(height: 24),
+              _CountTile(
+                icon: Icons.bluetooth_searching,
+                label: 'BLE advertisements',
+                count: _recorder.bleCount,
               ),
-            ),
-            const SizedBox(height: 14),
-            TextField(
-              controller: _baseUrlController,
-              enabled: !_isBusy,
-              keyboardType: TextInputType.url,
-              decoration: const InputDecoration(
-                labelText: 'Base URL',
-                hintText: 'Leave blank for package default',
-                border: OutlineInputBorder(),
+              _CountTile(
+                icon: Icons.gps_fixed,
+                label: 'GPS fixes',
+                count: _recorder.gpsCount,
               ),
-            ),
-            const SizedBox(height: 14),
-            TextField(
-              controller: _durationController,
-              enabled: !_isBusy,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Run duration (minutes)',
-                hintText: 'Leave blank to run indefinitely',
-                border: OutlineInputBorder(),
+              _CountTile(
+                icon: Icons.wifi,
+                label: 'Wi-Fi access point readings',
+                count: _recorder.wifiCount,
               ),
-            ),
-            const SizedBox(height: 14),
-            TextField(
-              controller: _surroundingScanIntervalController,
-              enabled: !_isBusy && _selectedMode != LocalizationMode.onlyGps,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Surrounding-device scan interval (seconds)',
-                helperText:
-                    'Median RSSI is collected for this period and attached '
-                    'once to the next tracking payload.',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 18),
-            Text('Localization mode',
-                style: Theme.of(context).textTheme.titleSmall),
-            const SizedBox(height: 8),
-            SegmentedButton<LocalizationMode>(
-              segments: const [
-                ButtonSegment(
-                  value: LocalizationMode.onlyGps,
-                  icon: Icon(Icons.gps_fixed),
-                  label: Text('GPS'),
-                ),
-                ButtonSegment(
-                  value: LocalizationMode.onlyBle,
-                  icon: Icon(Icons.bluetooth),
-                  label: Text('BLE'),
-                ),
-                ButtonSegment(
-                  value: LocalizationMode.bothGPSandBLE,
-                  icon: Icon(Icons.explore),
-                  label: Text('Both'),
+              if (_status != null) ...[
+                const SizedBox(height: 16),
+                Text(_status!, style: TextStyle(color: theme.colorScheme.error)),
+              ],
+              if (_savedPath != null) ...[
+                const SizedBox(height: 16),
+                Text('Last saved file', style: theme.textTheme.labelLarge),
+                SelectableText(_savedPath!),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: _isScanning ? null : _shareSavedFile,
+                  icon: const Icon(Icons.share),
+                  label: const Text('Share last saved file'),
                 ),
               ],
-              selected: {_selectedMode},
-              onSelectionChanged: _isBusy
-                  ? null
-                  : (selection) =>
-                      setState(() => _selectedMode = selection.single),
-            ),
-            const SizedBox(height: 22),
-            FilledButton.icon(
-              onPressed: _isBusy ? null : _startService,
-              icon: const Icon(Icons.play_arrow),
-              label: Text(_isRunning ? 'Restart service' : 'Start service'),
-            ),
-            const SizedBox(height: 10),
-            OutlinedButton.icon(
-              onPressed: _isBusy || !_isRunning ? null : _stopService,
-              icon: const Icon(Icons.stop),
-              label: const Text('Stop service'),
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 16),
-              Text(
-                _error!,
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
             ],
-          ],
+          ),
         ),
       ),
     );
   }
 }
 
-String _modeLabel(LocalizationMode mode) => switch (mode) {
-      LocalizationMode.onlyGps => 'GPS',
-      LocalizationMode.onlyBle => 'BLE',
-      LocalizationMode.bothGPSandBLE => 'GPS + BLE',
-    };
+class _CountTile extends StatelessWidget {
+  const _CountTile({
+    required this.icon,
+    required this.label,
+    required this.count,
+  });
+
+  final IconData icon;
+  final String label;
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: Icon(icon),
+      title: Text(label),
+      trailing: Text(
+        '$count',
+        style: Theme.of(context).textTheme.titleMedium,
+      ),
+    );
+  }
+}
+
+/// Streams every BLE, GPS and Wi-Fi reading of a session into one CSV file.
+///
+/// Rows are written as they arrive rather than held until stop: a busy venue
+/// produces hundreds of BLE advertisements a second, which would otherwise
+/// pile up in memory for the whole session.
+class CsvScanRecorder extends ChangeNotifier {
+  static const _header = [
+    'timestamp_ms',
+    'time_iso',
+    'source',
+    'id',
+    'name',
+    'rssi',
+    'frequency_mhz',
+    'latitude',
+    'longitude',
+    'accuracy_m',
+    'altitude_m',
+    'speed_mps',
+    'bearing_deg',
+    'extra',
+  ];
+
+  static const _converter = ListToCsvConverter(eol: '\n');
+
+  IOSink? _sink;
+  String? _path;
+
+  /// Wi-Fi results include access points cached from earlier scans; only a
+  /// changed (bssid, timestamp) pair is a new sighting.
+  final _seenWifi = <String>{};
+
+  int bleCount = 0;
+  int gpsCount = 0;
+  int wifiCount = 0;
+
+  static Future<Directory> _directory() async =>
+      (Platform.isAndroid ? await getExternalStorageDirectory() : null) ??
+      await getApplicationDocumentsDirectory();
+
+  /// The most recently written session file, if any.
+  static Future<String?> latestSavedFile() async {
+    final files = (await _directory())
+        .listSync()
+        .whereType<File>()
+        .where((file) => file.path.endsWith('.csv'))
+        .toList()
+      ..sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
+    return files.isEmpty ? null : files.first.path;
+  }
+
+  Future<void> open() async {
+    final directory = await _directory();
+    final stamp = DateTime.now()
+        .toIso8601String()
+        .replaceAll(':', '-')
+        .split('.')
+        .first;
+    final file = File('${directory.path}/scan_$stamp.csv');
+
+    _path = file.path;
+    _sink = file.openWrite()..write('${_converter.convert([_header])}\n');
+    _seenWifi.clear();
+    bleCount = gpsCount = wifiCount = 0;
+    notifyListeners();
+  }
+
+  /// Flushes and closes the file, returning its path.
+  Future<String?> close() async {
+    final sink = _sink;
+    _sink = null;
+    if (sink == null) return null;
+    await sink.flush();
+    await sink.close();
+    return _path;
+  }
+
+  void addBleBatch(List<Map<String, dynamic>> batch) {
+    _write([
+      for (final reading in batch)
+        _row(
+          time: _parseTime(reading['timestamp']),
+          source: 'ble',
+          id: reading['device'],
+          name: reading['name'],
+          rssi: reading['rssi'],
+          extra: reading['manufacturerHex'],
+        ),
+    ]);
+    bleCount += batch.length;
+    notifyListeners();
+  }
+
+  void addGpsFix(Map<String, dynamic> fix) {
+    _write([
+      _row(
+        time: _parseTime(fix['timestamp']),
+        source: 'gps',
+        latitude: fix['latitude'],
+        longitude: fix['longitude'],
+        accuracy: fix['accuracy'],
+        altitude: fix['altitude'],
+        speed: fix['speed'],
+        bearing: fix['bearing'],
+      ),
+    ]);
+    gpsCount++;
+    notifyListeners();
+  }
+
+  void addWifiResults(List<WiFiAccessPoint> accessPoints) {
+    final now = DateTime.now();
+    final fresh = accessPoints
+        .where((ap) => _seenWifi.add('${ap.bssid}|${ap.timestamp}'))
+        .toList();
+    if (fresh.isEmpty) return;
+    _write([
+      for (final ap in fresh)
+        _row(
+          time: now,
+          source: 'wifi',
+          id: ap.bssid,
+          name: ap.ssid,
+          rssi: ap.level,
+          frequency: ap.frequency,
+          extra: 'boot_us=${ap.timestamp}',
+        ),
+    ]);
+    wifiCount += fresh.length;
+    notifyListeners();
+  }
+
+  void _write(List<List<Object?>> rows) {
+    final sink = _sink;
+    if (sink == null || rows.isEmpty) return;
+    final cells = [
+      for (final row in rows) [for (final cell in row) cell ?? ''],
+    ];
+    sink.write('${_converter.convert(cells)}\n');
+  }
+
+  List<Object?> _row({
+    required DateTime time,
+    required String source,
+    Object? id,
+    Object? name,
+    Object? rssi,
+    Object? frequency,
+    Object? latitude,
+    Object? longitude,
+    Object? accuracy,
+    Object? altitude,
+    Object? speed,
+    Object? bearing,
+    Object? extra,
+  }) =>
+      [
+        time.millisecondsSinceEpoch,
+        time.toIso8601String(),
+        source,
+        id,
+        name,
+        rssi,
+        frequency,
+        latitude,
+        longitude,
+        accuracy,
+        altitude,
+        speed,
+        bearing,
+        extra,
+      ];
+
+  /// Android sends epoch millis; older iOS builds send an ISO-8601 string.
+  static DateTime _parseTime(Object? raw) {
+    if (raw is num) return DateTime.fromMillisecondsSinceEpoch(raw.toInt());
+    if (raw is String) return DateTime.tryParse(raw) ?? DateTime.now();
+    return DateTime.now();
+  }
+}

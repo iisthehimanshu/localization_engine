@@ -1,18 +1,24 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localization_engine_example/main.dart';
 
 void main() {
-  testWidgets('shows localization host controls', (tester) async {
-    await tester.pumpWidget(const LocalizationHostApp());
+  testWidgets('shows start and stop controls', (tester) async {
+    await tester.pumpWidget(const ScanLoggerApp());
 
-    expect(find.text('Localization host'), findsWidgets);
-    expect(find.text('Venue name'), findsOneWidget);
-    expect(find.text('GPS'), findsOneWidget);
-    expect(find.text('BLE'), findsOneWidget);
-    expect(find.text('Both'), findsOneWidget);
-    expect(
-      find.text('Surrounding-device scan interval (seconds)'),
-      findsOneWidget,
+    expect(find.text('Start scanning'), findsOneWidget);
+    expect(find.text('Stop scanning'), findsOneWidget);
+    expect(find.text('BLE advertisements'), findsOneWidget);
+    expect(find.text('GPS fixes'), findsOneWidget);
+    expect(find.text('Wi-Fi access point readings'), findsOneWidget);
+
+    // Nothing to stop before a session has started.
+    final stop = tester.widget<ButtonStyleButton>(
+      find.ancestor(
+        of: find.text('Stop scanning'),
+        matching: find.bySubtype<ButtonStyleButton>(),
+      ),
     );
+    expect(stop.onPressed, isNull);
   });
 }
