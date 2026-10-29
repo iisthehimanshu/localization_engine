@@ -1,0 +1,4 @@
+# Files allowed to call the iwayplus backend themselves instead of through
+# Data_Repository. Checked by Data_Repository's tool/check_backend_calls.sh.
+
+lib/src/network/api/tracking_bulk_api.dart   # tracking upload; not moved yet (it can run in the background isolate, which must not open Data_Repository's Hive boxes)
