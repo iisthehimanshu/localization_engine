@@ -34,7 +34,8 @@ dependencies:
   data_repository:
     git:
       url: https://github.com/iisthehimanshu/Data_Repository.git
-      ref: 8352edf6de85d7f72285668321deb1ebaddb8b1a
+      ref: main
+
   hive_flutter: ^1.1.0
 
 
