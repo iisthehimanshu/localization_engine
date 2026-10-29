@@ -12,7 +12,7 @@ import 'package:localization_engine/src/config/config.dart';
 import 'package:localization_engine/src/localizationAlgorithm/ble_position_estimator.dart';
 import 'package:localization_engine/src/localization_mode.dart';
 import 'package:localization_engine/src/network/api/UserTrackingWebSocket.dart';
-import 'package:localization_engine/src/network/api/beaconapi.dart';
+import 'package:localization_engine/src/network/venue_beacons.dart';
 import 'package:localization_engine/src/network/model/beaconData.dart';
 import 'package:localization_engine/src/scan/scan_source.dart';
 import 'package:localization_engine/src/scan/scan_source_locator.dart';
@@ -89,6 +89,7 @@ class LocalizationEngine {
   final LocalizationMode localizationMode;
   final DateTime? stopAt;
   final String? _baseURL;
+  final List<Beacon>? _beacons;
 
   /// BLE observation window used for surrounding-device RSSI aggregation.
   ///
@@ -173,16 +174,22 @@ class LocalizationEngine {
   /// and Bluetooth adapters. It defaults to `false` for normal app usage.
   /// [localizationMode] controls which adapters, native scanners, and event
   /// streams are activated. It defaults to GPS and BLE together.
+  ///
+  /// [beacons] supplies the venue's beacons instead of fetching them; the
+  /// background service passes them, because its isolate must not open the
+  /// cache the main isolate uses.
   LocalizationEngine(
     String venueName, {
     String? baseURL,
+    List<Beacon>? beacons,
     Map<String, Map<int, Map<String, dynamic>>>? floorConfig,
     bool skipAdapterSetup = false,
     this.localizationMode = LocalizationMode.bothGPSandBLE,
     this.stopAt,
     this.surroundingDeviceScanInterval = const Duration(seconds: 10),
   })  : _skipAdapterSetup = skipAdapterSetup,
-        _baseURL = baseURL {
+        _baseURL = baseURL,
+        _beacons = beacons {
     if (surroundingDeviceScanInterval <= Duration.zero) {
       throw ArgumentError.value(
         surroundingDeviceScanInterval,
@@ -376,6 +383,7 @@ class LocalizationEngine {
     _localization = InitialLocalization(
       _venueName,
       headingProvider: () async => _latestHeading,
+      beacons: _beacons,
     );
     await _localization!.parseBeaconMap(_venueName);
   }
@@ -1402,5 +1410,5 @@ class LocalizationEngine {
   /// the full beacon layout on a map and cross-referencing which of them are
   /// currently visible on the BLE scan stream.
   Future<List<Beacon>> fetchVenueBeacons(String venueName) =>
-      beaconapi().fetchBeaconData(venueName);
+      VenueBeacons().fetch(venueName);
 }

@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:localization_engine/src/network/api/localizationUsingMLModelapi.dart';
 import 'Point.dart';
-import 'src/network/api/beaconapi.dart';
+import 'src/network/venue_beacons.dart';
 import 'src/network/model/beaconData.dart';
 import 'src/localizationAlgorithm/_directionalLocalisation.dart';
 
@@ -21,8 +21,15 @@ class InitialLocalization{
   /// Defaults to `flutter_compass`, which has no web implementation — so a
   /// bundle running inside the host app's WebView passes a provider backed by
   /// the scan source's heading stream instead.
-  InitialLocalization(this._venueName, {Future<double?> Function()? headingProvider})
-      : _headingProvider = headingProvider;
+  ///
+  /// [beacons], when given, is used instead of fetching the venue's beacons;
+  /// the background isolate is handed them because it can't use the cache.
+  InitialLocalization(this._venueName,
+      {Future<double?> Function()? headingProvider, List<Beacon>? beacons})
+      : _headingProvider = headingProvider,
+        _beacons = beacons;
+
+  final List<Beacon>? _beacons;
 
   final Future<double?> Function()? _headingProvider;
 
@@ -50,7 +57,7 @@ class InitialLocalization{
 
   Future<HashMap<String, Beacon>> parseBeaconMap(String venueName) async {
     if(_venueName == venueName && _apibeaconmap.isNotEmpty) return _apibeaconmap;
-    List<dynamic> beaconList = await beaconapi().fetchBeaconData(venueName);
+    List<Beacon> beaconList = _beacons ?? await VenueBeacons().fetch(venueName);
     for (var beacon in beaconList) {
       if (beacon.name != null) {
         _apibeaconmap[beacon.name!] = beacon;

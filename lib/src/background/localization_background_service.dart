@@ -10,7 +10,10 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../localization_engine.dart' show LocalizationEngine;
+import '../config/config.dart';
 import '../localization_mode.dart';
+import '../network/model/beaconData.dart';
+import '../network/venue_beacons.dart';
 import 'localization_service_configuration.dart';
 
 const _configurationKey = 'localization_background_service.configuration';
@@ -60,12 +63,25 @@ class LocalizationBackgroundService {
       await stop();
     }
 
+    // Loaded here, in the main isolate, and carried in the configuration:
+    // the background isolate must not open the beacon cache the main isolate
+    // has open (Hive doesn't support one box in two isolates). Throws when
+    // there is neither a cached copy nor a network.
+    if (baseUrl != null) AppConfig.url = baseUrl;
+    final beacons = mode == LocalizationMode.onlyGps
+        ? null
+        : [
+            for (final b in await VenueBeacons().raw(normalizedVenueName))
+              Map<String, dynamic>.from(b as Map),
+          ];
+
     final configuration = LocalizationServiceConfiguration(
       venueName: normalizedVenueName,
       baseUrl: baseUrl,
       mode: mode,
       stopAt: duration == null ? null : DateTime.now().add(duration),
       surroundingDeviceScanInterval: surroundingDeviceScanInterval,
+      beacons: beacons,
     );
     await _writeConfiguration(configuration);
 
@@ -73,6 +89,7 @@ class LocalizationBackgroundService {
       _iosForegroundEngine = LocalizationEngine(
         configuration.venueName,
         baseURL: configuration.baseUrl,
+        beacons: _beaconsOf(configuration),
         localizationMode: configuration.mode,
         skipAdapterSetup: true,
         stopAt: configuration.stopAt,
@@ -176,6 +193,7 @@ class LocalizationBackgroundService {
       _iosForegroundEngine = LocalizationEngine(
         configuration.venueName,
         baseURL: configuration.baseUrl,
+        beacons: _beaconsOf(configuration),
         localizationMode: configuration.mode,
         skipAdapterSetup: true,
         stopAt: configuration.stopAt,
@@ -309,11 +327,17 @@ Future<void> _runBackgroundService(ServiceInstance service) async {
   _backgroundEngine = LocalizationEngine(
     configuration.venueName,
     baseURL: configuration.baseUrl,
+    beacons: _beaconsOf(configuration),
     localizationMode: configuration.mode,
     skipAdapterSetup: true,
     stopAt: configuration.stopAt,
     surroundingDeviceScanInterval: configuration.surroundingDeviceScanInterval,
   );
+}
+
+List<Beacon>? _beaconsOf(LocalizationServiceConfiguration configuration) {
+  final json = configuration.beacons;
+  return json == null ? null : VenueBeacons.parse(json);
 }
 
 Future<void> _stopFromBackground(ServiceInstance service) async {

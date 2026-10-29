@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localization_engine/localization_engine.dart';
 
@@ -21,6 +23,42 @@ void main() {
       expect(restored.stopAt, isNull);
       expect(
           restored.surroundingDeviceScanInterval, const Duration(seconds: 25));
+    });
+
+    test('carries the venue beacons to the background isolate', () {
+      const configuration = LocalizationServiceConfiguration(
+        venueName: 'IITDelhi',
+        mode: LocalizationMode.onlyBle,
+        beacons: [
+          {'name': 'IW001', 'buildingID': 'b1', 'floor': 2},
+        ],
+      );
+
+      final restored = LocalizationServiceConfiguration.fromJson(
+        jsonDecode(jsonEncode(configuration.toJson())) as Map<String, Object?>,
+      );
+
+      expect(restored.beacons, [
+        {'name': 'IW001', 'buildingID': 'b1', 'floor': 2},
+      ]);
+    });
+
+    test('a configuration saved before beacons were carried has none', () {
+      final restored = LocalizationServiceConfiguration.fromJson(
+        <String, Object?>{'venueName': 'IITDelhi', 'mode': 'onlyBle'},
+      );
+      expect(restored.beacons, isNull);
+    });
+
+    test('rejects beacons that are not a list of objects', () {
+      expect(
+        () => LocalizationServiceConfiguration.fromJson(<String, Object?>{
+          'venueName': 'IITDelhi',
+          'mode': 'onlyBle',
+          'beacons': ['IW001'],
+        }),
+        throwsFormatException,
+      );
     });
 
     for (final mode in LocalizationMode.values) {

@@ -8,6 +8,7 @@ class LocalizationServiceConfiguration {
     this.baseUrl,
     this.stopAt,
     this.surroundingDeviceScanInterval = const Duration(seconds: 10),
+    this.beacons,
   });
 
   final String venueName;
@@ -16,6 +17,12 @@ class LocalizationServiceConfiguration {
   final DateTime? stopAt;
   final Duration surroundingDeviceScanInterval;
 
+  /// The venue's beacons as the backend sent them (`/secured/venue/beacons`),
+  /// loaded in the main isolate. The background isolate uses these and never
+  /// opens the beacon cache, which only the main isolate may touch. Null
+  /// when the mode doesn't use BLE.
+  final List<Map<String, dynamic>>? beacons;
+
   Map<String, Object?> toJson() => <String, Object?>{
         'venueName': venueName,
         'baseUrl': baseUrl,
@@ -23,6 +30,7 @@ class LocalizationServiceConfiguration {
         'stopAt': stopAt?.millisecondsSinceEpoch,
         'surroundingDeviceScanIntervalMs':
             surroundingDeviceScanInterval.inMilliseconds,
+        'beacons': beacons,
       };
 
   factory LocalizationServiceConfiguration.fromJson(
@@ -34,6 +42,7 @@ class LocalizationServiceConfiguration {
     final stopAtMilliseconds = json['stopAt'];
     final surroundingIntervalMilliseconds =
         json['surroundingDeviceScanIntervalMs'] ?? 10000;
+    final beacons = json['beacons'];
 
     if (venueName is! String || venueName.trim().isEmpty) {
       throw const FormatException('venueName must be a non-empty string.');
@@ -54,6 +63,11 @@ class LocalizationServiceConfiguration {
       );
     }
 
+    if (beacons != null &&
+        (beacons is! List || beacons.any((b) => b is! Map))) {
+      throw const FormatException('beacons must be a list of objects or null.');
+    }
+
     final mode = LocalizationMode.values.where(
       (candidate) => candidate.name == modeName,
     );
@@ -70,6 +84,9 @@ class LocalizationServiceConfiguration {
           : DateTime.fromMillisecondsSinceEpoch(stopAtMilliseconds as int),
       surroundingDeviceScanInterval:
           Duration(milliseconds: surroundingIntervalMilliseconds),
+      beacons: beacons == null
+          ? null
+          : [for (final b in beacons as List) Map<String, dynamic>.from(b as Map)],
     );
   }
 }

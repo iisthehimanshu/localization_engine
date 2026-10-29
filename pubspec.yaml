@@ -29,6 +29,12 @@ dependencies:
   http:
   flutter_compass:
   hive: ^2.2.3
+  # Pinned to a commit: the Hive cache format lives in this package. Keep the
+  # same ref as navigation_sdk and unified_map_view, or pub can't resolve them.
+  data_repository:
+    git:
+      url: https://github.com/iisthehimanshu/Data_Repository.git
+      ref: 8352edf6de85d7f72285668321deb1ebaddb8b1a
   hive_flutter: ^1.1.0
 
 
