@@ -151,8 +151,16 @@ class BLEPositionEstimator {
   static const double _posDeltaThresh   = 12.0;  // heuristic walking signal (px)
   static const double _alphaStationary  = 0.5;  // EMA α stationary
   static const double _alphaWalking     = 0.7;  // EMA α walking
-  static const double _maxJumpStat      = 16.0;   // max px/update stationary ~4m
-  static const double _maxJumpWalk      = 16.0;  // max px/update walking    ~4m (pixel per m is 4)
+  // Velocity cap, in px per second of wall-clock time since the last fix
+  // (4 px = 1 m). Time-based rather than per-update so that after a scan gap
+  // the fix may catch up by the distance the user could have covered in the
+  // gap, instead of crawling there one capped step per tick.
+  static const double _maxSpeedStat     = 16.0;  // px/s stationary ~4 m/s
+  static const double _maxSpeedWalk     = 16.0;  // px/s walking    ~4 m/s
+  // A gap between fixes at least this long (e.g. scanning paused) skips the
+  // EMA for the next fix: the old smoothed position is stale, so blending
+  // with it would only add catch-up lag. The velocity cap still applies.
+  static const Duration _emaSkipGap     = Duration(seconds: 5);
   static const int    _rssiMin          = -95;
   static const int    _rssiMax          = -50;
   // Trust band a beacon's aggregated RSSI must sit inside to be positioned on.
@@ -210,6 +218,7 @@ class BLEPositionEstimator {
   // ── Rolling state ──────────────────────────────────────────────────────────
   final Queue<_BufEntry> _buf = Queue();
   List<double>? _emaPos;           // [x, y]
+  DateTime?     _emaAt;            // when _emaPos was last updated
   Set<String>   _prevTop2 = {};
   String?       _prevR1;
   List<double>? _prevRawPos;
@@ -336,6 +345,7 @@ class BLEPositionEstimator {
         _currBuilding != null && _currBuilding != targetBuilding;
     if (buildingChanged) {
       _emaPos     = null;
+      _emaAt      = null;
       _prevTop2   = {};
       _prevR1     = null;
       _prevRawPos = null;
@@ -426,7 +436,7 @@ class BLEPositionEstimator {
     }
 
     final alpha   = isWalking ? _alphaWalking   : _alphaStationary;
-    final maxJump = isWalking ? _maxJumpWalk     : _maxJumpStat;
+    final maxSpeed = isWalking ? _maxSpeedWalk : _maxSpeedStat;
 
     // ── 10. Velocity cap + EMA ───────────────────────────────────────────
     double jumpPx = 0.0;
@@ -436,17 +446,25 @@ class BLEPositionEstimator {
       final dx = rawX - _emaPos![0];
       final dy = rawY - _emaPos![1];
       jumpPx = sqrt(dx * dx + dy * dy);
+      // Allowed travel scales with the time since the last fix, so a scan
+      // pause (during which update() returned null and _emaAt stood still)
+      // lets the next fix move as far as the user could have walked.
+      final dtS = max(0, now.difference(_emaAt!).inMilliseconds) / 1000.0;
+      final maxJump = maxSpeed * dtS;
       double cx = rawX, cy = rawY;
       if (jumpPx > maxJump) {
         final scale = maxJump / jumpPx;
         cx = _emaPos![0] + dx * scale;
         cy = _emaPos![1] + dy * scale;
       }
-      _emaPos = [
-        alpha * cx + (1 - alpha) * _emaPos![0],
-        alpha * cy + (1 - alpha) * _emaPos![1],
-      ];
+      _emaPos = now.difference(_emaAt!) >= _emaSkipGap
+          ? [cx, cy]
+          : [
+              alpha * cx + (1 - alpha) * _emaPos![0],
+              alpha * cy + (1 - alpha) * _emaPos![1],
+            ];
     }
+    _emaAt = now;
 
     final sx = _emaPos![0], sy = _emaPos![1];
 
@@ -508,6 +526,7 @@ class BLEPositionEstimator {
   void reset() {
     _buf.clear();
     _emaPos       = null;
+    _emaAt        = null;
     _prevTop2     = {};
     _prevR1       = null;
     _prevRawPos   = null;
