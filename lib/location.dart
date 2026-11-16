@@ -57,6 +57,8 @@ class BeaconPointLocation {
   /// Names of the beacon(s) used for this fix.
   final List<String> beacons;
 
+  final Set<String> visibleBeacons;
+
   /// Representative RSSI of the resolved beacon, or `null`.
   final double? rssi;
 
@@ -84,6 +86,7 @@ class BeaconPointLocation {
     required this.latitude,
     required this.longitude,
     required this.beacons,
+    required this.visibleBeacons,
     required this.rssi,
     required this.bestFloor,
     required this.timeStamp,
@@ -99,6 +102,7 @@ class BeaconPointLocation {
       latitude: (json['latitude'] as num).toDouble(),
       longitude: (json['longitude'] as num).toDouble(),
       beacons: List<String>.from(json['beacons'] ?? []),
+      visibleBeacons: Set<String>.from(json['visibleBeacons'] ?? []),
       rssi: json['rssi'],
       bestFloor: json['bestFloor'],
       pendingFloor: json['pendingFloor'],
@@ -115,6 +119,7 @@ class BeaconPointLocation {
       'latitude': latitude,
       'longitude': longitude,
       'beacons': beacons,
+      'visibleBeacons': visibleBeacons,
       'rssi': rssi,
       'bestFloor':bestFloor,
       'pendingFloor': pendingFloor
