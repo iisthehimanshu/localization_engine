@@ -57,7 +57,7 @@ class BeaconPointLocation {
   /// Names of the beacon(s) used for this fix.
   final List<String> beacons;
 
-  final Set<String> visibleBeacons;
+  final Set<String>? visibleBeacons;
 
   /// Representative RSSI of the resolved beacon, or `null`.
   final double? rssi;

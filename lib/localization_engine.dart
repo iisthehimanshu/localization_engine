@@ -1274,7 +1274,7 @@ class LocalizationEngine {
         rssi: pos.rank1Rssi.toDouble(),
         bestFloor: pos.floor,
         pendingFloor: pos.pendingFloor,
-        timeStamp: now ?? DateTime.now());
+        timeStamp: now ?? DateTime.now(), visibleBeacons: null);
   }
 
   Map<String, List<MapEntry<DateTime, int>>> groupByDevice(

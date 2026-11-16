@@ -122,6 +122,15 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.0.8"
+  data_repository:
+    dependency: transitive
+    description:
+      path: "."
+      ref: main
+      resolved-ref: "7b9f2ff0de0f350609e84174e2032481a8a05923"
+      url: "https://github.com/iisthehimanshu/Data_Repository.git"
+    source: git
+    version: "0.0.1"
   dbus:
     dependency: transitive
     description:

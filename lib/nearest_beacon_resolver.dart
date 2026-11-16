@@ -61,7 +61,7 @@ class NearestBeaconResolver {
         beacons: [bestBeacon!],
         rssi: bestAvg > 0 ? -bestAvg : bestAvg,
         bestFloor: bestFloor??beacon.floor!,
-        timeStamp: DateTime.now()
+        timeStamp: DateTime.now(), visibleBeacons: null
       );
     }
 
