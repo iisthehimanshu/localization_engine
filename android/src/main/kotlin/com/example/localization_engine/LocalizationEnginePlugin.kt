@@ -91,6 +91,20 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     return String(out)
   }
 
+  /// The advertisement exactly as transmitted (AD structures back to back,
+  /// e.g. `0B09…0EFF0505…`), minus the zero padding Android appends to fill
+  /// the fixed-size record. Uppercase hex, `""` when there is no record.
+  private fun packetHexOf(bytes: ByteArray?): String {
+    if (bytes == null) return ""
+    var end = 0
+    while (end < bytes.size) {
+      val length = bytes[end].toInt() and 0xFF
+      if (length == 0) break
+      end += 1 + length
+    }
+    return toHex(bytes.copyOf(minOf(end, bytes.size)))
+  }
+
   // GPS related
   private var locationManager: LocationManager? = null
   private var gpsEventSink: EventChannel.EventSink? = null
@@ -170,7 +184,8 @@ class LocalizationEnginePlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
           "name" to deviceName,
           "rssi" to result.rssi,
           "timestamp" to System.currentTimeMillis(),
-          "manufacturerHex" to manufacturerHex
+          "manufacturerHex" to manufacturerHex,
+          "packetHex" to packetHexOf(result.scanRecord?.bytes)
         )
         scanBuffer.add(resultMap)
       }

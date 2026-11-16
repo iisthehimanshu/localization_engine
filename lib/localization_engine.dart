@@ -1285,11 +1285,13 @@ class LocalizationEngine {
         visibleBeacons: visibleBeacons);
   }
 
-  /// Advertisement packets (`0X` + manufacturer-data hex, e.g.
-  /// `0X5520F901F4000000000000`) of the readings in [batch] whose beacon
-  /// survived [InitialLocalization.filterBeacons] — i.e. the annotated beacons
-  /// actually in view. A beacon can contribute more than one packet if its
-  /// payload changed within the batch.
+  /// Raw advertisement packets (`0x` + the scanner's `packetHex`, e.g.
+  /// `0x0B09495732353033303930320EFF05056020F901F4000000000000`) of the
+  /// readings in [batch] whose beacon survived
+  /// [InitialLocalization.filterBeacons] — i.e. the annotated beacons actually
+  /// in view. A beacon can contribute more than one packet if its payload
+  /// changed within the batch. Readings from a scanner too old to send
+  /// `packetHex` contribute nothing.
   static Set<String> visiblePackets(
     List<Map<String, dynamic>> batch,
     Map<String, List<MapEntry<DateTime, int>>> filteredData,
@@ -1297,10 +1299,9 @@ class LocalizationEngine {
     final packets = <String>{};
     for (final item in batch) {
       if (!filteredData.containsKey(item['name'])) continue;
-      final hex = item['manufacturerHex'];
+      final hex = item['packetHex'];
       if (hex is! String || hex.isEmpty) continue;
-      final upper = hex.toUpperCase();
-      packets.add(upper.startsWith('0X') ? upper : '0X$upper');
+      packets.add('0x${hex.toUpperCase()}');
     }
     return packets;
   }
