@@ -749,7 +749,9 @@ class LocalizationEngine {
     final scanData = groupByDevice(batch);
     final filteredData = _localization?.filterBeacons(scanData) ?? scanData;
     final fix = _resolveWithEstimator(filteredData,
-        estimator: _estimatorStreamEstimator, now: closedAt);
+        estimator: _estimatorStreamEstimator,
+        now: closedAt,
+        visibleBeacons: visiblePackets(batch, filteredData));
     _logSimulationTick(scanData, fix);
     _estimatorLocationController.add(fix);
   }
@@ -1018,7 +1020,8 @@ class LocalizationEngine {
       final scanData = groupByDevice(batch);
       final filteredData = _localization?.filterBeacons(scanData) ?? scanData;
       final fix = _resolveWithEstimator(filteredData,
-          estimator: _estimatorStreamEstimator);
+          estimator: _estimatorStreamEstimator,
+          visibleBeacons: visiblePackets(batch, filteredData));
       if (_isSimulating) _logSimulationTick(scanData, fix);
       _estimatorLocationController.add(fix);
     });
@@ -1108,7 +1111,8 @@ class LocalizationEngine {
             final scanData = groupByDevice(bleIncrement);
             final filteredData =
                 _localization?.filterBeacons(scanData) ?? scanData;
-            beaconLocation = _resolveWithEstimator(filteredData);
+            beaconLocation = _resolveWithEstimator(filteredData,
+                visibleBeacons: visiblePackets(bleIncrement, filteredData));
           } else {
             // Stateless resolver — feed it the whole 6s sliding BLE window.
             for (final item in bleIncrement) {
@@ -1122,7 +1126,8 @@ class LocalizationEngine {
             final filteredData =
                 _localization?.filterBeacons(scanData) ?? scanData;
             final resolver = NearestBeaconResolver(_localization!);
-            beaconLocation = resolver.resolve(filteredData);
+            beaconLocation = resolver.resolve(filteredData,
+                visibleBeacons: visiblePackets(windowBatch, filteredData));
           }
         }
         int? bestFloor = beaconLocation?.bestFloor;
@@ -1229,7 +1234,9 @@ class LocalizationEngine {
   /// used.
   BeaconPointLocation? _resolveWithEstimator(
       Map<String, List<MapEntry<DateTime, int>>> filteredData,
-      {BLEPositionEstimator? estimator, DateTime? now}) {
+      {BLEPositionEstimator? estimator,
+      DateTime? now,
+      Set<String>? visibleBeacons}) {
     final localization = _localization;
     if (localization == null) return null;
 
@@ -1274,7 +1281,28 @@ class LocalizationEngine {
         rssi: pos.rank1Rssi.toDouble(),
         bestFloor: pos.floor,
         pendingFloor: pos.pendingFloor,
-        timeStamp: now ?? DateTime.now(), visibleBeacons: null);
+        timeStamp: now ?? DateTime.now(),
+        visibleBeacons: visibleBeacons);
+  }
+
+  /// Advertisement packets (`0X` + manufacturer-data hex, e.g.
+  /// `0X5520F901F4000000000000`) of the readings in [batch] whose beacon
+  /// survived [InitialLocalization.filterBeacons] — i.e. the annotated beacons
+  /// actually in view. A beacon can contribute more than one packet if its
+  /// payload changed within the batch.
+  static Set<String> visiblePackets(
+    List<Map<String, dynamic>> batch,
+    Map<String, List<MapEntry<DateTime, int>>> filteredData,
+  ) {
+    final packets = <String>{};
+    for (final item in batch) {
+      if (!filteredData.containsKey(item['name'])) continue;
+      final hex = item['manufacturerHex'];
+      if (hex is! String || hex.isEmpty) continue;
+      final upper = hex.toUpperCase();
+      packets.add(upper.startsWith('0X') ? upper : '0X$upper');
+    }
+    return packets;
   }
 
   Map<String, List<MapEntry<DateTime, int>>> groupByDevice(

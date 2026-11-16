@@ -12,8 +12,9 @@ class NearestBeaconResolver {
 
   /// Returns a [BeaconPointLocation] for the strongest beacon, or null.
   BeaconPointLocation? resolve(
-      Map<String, List<MapEntry<DateTime, int>>> data,
-      ) {
+      Map<String, List<MapEntry<DateTime, int>>> data, {
+      Set<String>? visibleBeacons,
+      }) {
 
     int? bestFloor;
 
@@ -61,7 +62,8 @@ class NearestBeaconResolver {
         beacons: [bestBeacon!],
         rssi: bestAvg > 0 ? -bestAvg : bestAvg,
         bestFloor: bestFloor??beacon.floor!,
-        timeStamp: DateTime.now(), visibleBeacons: null
+        timeStamp: DateTime.now(),
+        visibleBeacons: visibleBeacons,
       );
     }
 

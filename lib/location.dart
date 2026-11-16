@@ -119,7 +119,9 @@ class BeaconPointLocation {
       'latitude': latitude,
       'longitude': longitude,
       'beacons': beacons,
-      'visibleBeacons': visibleBeacons,
+      // A list, not the Set itself: jsonEncode rejects Sets, and the web
+      // bundle hands these maps on as JSON.
+      'visibleBeacons': visibleBeacons?.toList(),
       'rssi': rssi,
       'bestFloor':bestFloor,
       'pendingFloor': pendingFloor
