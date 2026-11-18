@@ -224,6 +224,27 @@ void main() {
       expect(pos.floor, 7);
     });
 
+    test('changing floor drops smoothing — the fix lands on the new floor',
+        () {
+      final db = <String, Beacon>{
+        'f0': _b('f0', 100, 100, 0),
+        'f1': _b('f1', 300, 300, 1),
+      };
+      final e = _est(db);
+      _tick(e, {'f0': -70});
+      expect(e.currentFloor, 0);
+
+      // Floor 0 leaves the window; floor 1 commits through the vanished-
+      // incumbent hatch. Without the reset the fix would start 283px away at
+      // (100,100) and creep in at the velocity cap.
+      final pos = _tick(e, {'f1': -70}, step: const Duration(seconds: 5));
+      expect(pos!.floorChanged, isTrue);
+      expect(pos.floor, 1);
+      expect(pos.smoothX, 300);
+      expect(pos.smoothY, 300);
+      expect(pos.jumpPx, 0);
+    });
+
     test('reset() clears the incumbent floor', () {
       final e = _est(rampDb);
       _tick(e, {'f1a': -60, ...floor0Far});

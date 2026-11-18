@@ -371,6 +371,19 @@ class BLEPositionEstimator {
     // Keep the state machine coherent if a caller ever stops forcing the floor.
     if (floor != null) _currFloor = floor;
 
+    // A committed floor change invalidates the smoothing state just like a
+    // building change: the old EMA position was resolved against the previous
+    // floor's beacons, so blending with it (and velocity-capping away from it)
+    // would make the fix crawl in from the old floor's coordinates instead of
+    // landing where the new floor's beacons put it.
+    if (floorChanged) {
+      _emaPos     = null;
+      _emaAt      = null;
+      _prevTop2   = {};
+      _prevR1     = null;
+      _prevRawPos = null;
+    }
+
     final floorAll =
         bldEntries.where((e) => e.value.floor == targetFloor).toList();
     if (floorAll.isEmpty) return null;   // only reachable with a forced floor
