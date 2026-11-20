@@ -90,6 +90,11 @@ class WebSocketService {
       AppConfig.baseUrl,
       IO.OptionBuilder()
           .setTransports(['websocket'])
+          // The server reads the key from `auth` or the headers, never the
+          // query. Browsers can't set WebSocket headers, so on web `auth` is
+          // the only one that arrives; without it the handshake is rejected
+          // and no tracking is ever sent.
+          .setAuth({'apikey': AppConfig.apiKey})
           .setExtraHeaders({'apikey': AppConfig.apiKey})
           .setQuery({'apikey': AppConfig.apiKey})
           // Use a private Manager: the shared cache would hand back the previous
